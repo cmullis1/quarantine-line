@@ -67,29 +67,63 @@ node tools/headless.mjs --bot balanced --days 50 --difficulty veteran
 node tools/balance.mjs --bots idle,balanced,turtle --diffs recruit,veteran --seeds 4
 ```
 
-## How it was built
+## How it works
 
-I came up with the idea (a country defending itself against a zombie pandemic, from the day the
-infection is discovered), set the quality bar, and then handed the design decisions to Claude Code as
-an experiment in how far it could take a game on its own. Claude Code researched the genre, wrote the
-design, and wrote nearly all of the code. I was the play-tester and the ears: I played it and listened
-to the music in rounds, said what felt wrong (the map felt too small, buttons flashed, cars drove
-across fields, the melody was boring and had a shrill note in it), and each round of feedback was
-logged and fixed.
+The simulation in `js/sim/` is plain data and plain functions: no DOM, no Three.js. It advances in fixed steps of
+0.05 game hours (a day is 36 real seconds at 1x) and reports what happened as a queue of events (shots, deaths,
+climbs over a wall, alerts). Each frame the renderer, the sound engine and the HUD drain that queue; they read the
+state but never change it. The player and the bots act only through one commands API (`js/sim/commands.js`),
+which checks every request and turns a stale id or bad input into a refusal instead of an exception.
 
-The testing is what makes a project like this hold together:
+- **Deterministic and saveable.** All randomness comes from one seeded mulberry32 generator whose state is part
+  of the game state; the weather is hashed from the seed and the day so it never shifts that stream. A save is the
+  state as JSON in localStorage, and the map is rebuilt from the seed. Tests check that two runs with the same seed
+  and commands end in identical state, and that a game saved in the middle of a horde and reloaded carries on
+  exactly as if it had never stopped.
+- **A horde that flows.** The dead do not pathfind one by one. Whenever a structure goes up or a town falls, the
+  sim recomputes a multi-source Dijkstra flow field over the 144 x 144 tile grid toward every living town (bigger
+  towns pull harder), and each of the dead follows the arrow on its tile. Structures are passable at a high cost,
+  so the field leads the horde through a gap if there is one and otherwise straight to the wall to claw at it.
+  Noise and living targets nearby pull individuals off the field. Squads and refugees use A* with cheaper roads;
+  buses use a road-only A*.
+- **Pile-ups.** Every step, each wall counts the dead pressing into it plus the stalled crowd behind them that is
+  heading its way. When the count reaches the wall's threshold (higher for a High Wall), bodies from the top of
+  the pile drop to the far side at a steady rate.
+- **Hidden infection.** Each town's true case count grows logistically. The reported count is the true count from
+  some hours earlier times a detection rate built from laws, hospitals, hazmat teams nearby and public trust;
+  censorship makes it later and noisier. Past a threshold the sick turn in the streets, and a fallen town keeps
+  releasing the dead.
+- **Generated countries.** The campaign map is hand-shaped. A Sandbox country is built from seeded value noise
+  and fractal noise and re-rolled until it is fair: every town reachable from the capital, at least four border
+  crossings, and a walkable route from every foreign city to its crossing.
+- **Rendering.** Three.js r160 with an orthographic, true isometric camera. Every model is assembled from
+  primitives at load time, and the scene is drawn at a fraction of screen resolution (P cycles the pixel size)
+  for a chunky low-res look. Soldiers, civilians, refugees and every kind of the dead share one InstancedMesh per
+  body part, about a dozen draw calls for everyone on screen, so hundreds of the dead stay cheap. Tracers,
+  particles and decals come from fixed pools. The game ships no image or audio files.
+- **An adaptive score.** Every sound is synthesised with Web Audio. A music director made of pure functions plans
+  the score one 8-bar phrase at a time: a song for each act, a mood (Hopeful in C major, Uneasy and Dire in A
+  minor, each with its own tempo, groove, band and reverb) that follows how badly the war is going, and an
+  intensity level that follows the danger on screen. A change of mood glides the tempo over one phrase and
+  crossfades the bands on a shared chord, and the sequencer schedules each sixteenth just ahead of the audio clock
+  so the grid bends without breaking. Open the game with `?musiclab` to pin any part of the score and hear it.
 
-- 223 automated tests cover the simulation (spread, pathfinding, pile-ups, economy, laws, saves, music).
-- Bots with different play styles play the whole campaign headlessly. Each balance pass runs them
-  across difficulties and random seeds, so a change that makes the game too easy or too hard shows up
-  as numbers, not a feeling.
-- 23 scripted play-tests (kept in the private working repo) drive the real game in a browser with real
-  mouse and keyboard input and take screenshots at both of my monitor sizes, using
-  [Eyes](https://github.com/cmullis1/eyes), another project in this portfolio.
+**Bots and balance.** The bots in `js/ai/bots.js` play through the same commands as the UI. Each has a
+recognisable style (idle, balanced, turtle, hawk, dove) so a balance pass shows what the numbers reward. An expert
+bot plays like the balanced one but watches its weakest meter and changes approach, and answers decision cards by
+reading the costs printed on them. The expert seals the border with the cheapest possible wall line, found as a
+minimum vertex cut (Dinic's max flow) between foreign land and the living towns, and replans it when a wall falls.
+`tools/balance.mjs` runs bots x difficulties x seeds across worker threads, so a change that makes the game too
+easy or too hard shows up as numbers. The balanced bot also plays the attract-mode game behind the main menu.
 
-It was built in two days of sessions in October 2026, in plain JavaScript and
-[Three.js](https://threejs.org/). Every model and sound is generated in code: the game ships no image
-or audio files.
+**Tests.** 223 tests run on Node's built-in test runner and cover spread, pathfinding, pile-ups, the economy,
+laws, saves, the bots and the music. The audio tests run against a Web Audio mock that rejects what a real browser
+rejects (non-finite values, bad times) and records the node graph, so they can check, for example, that the Dire
+mood sings an octave lower, that night darkens every band, and that a stalled frame loop resumes without a burst
+of notes. Scripted play-tests (kept outside this repo) also drive the real game in a browser with real mouse and
+keyboard input, using [Eyes](https://github.com/cmullis1/eyes).
+
+Built with Claude Code.
 
 ## License
 
