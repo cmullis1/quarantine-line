@@ -4,6 +4,7 @@ import { WEAPONS, BUILDINGS } from '../../config/buildings.js';
 import { UNITS } from '../../config/units.js';
 import { killDead } from '../entities.js';
 import { makeNoise } from './dead.js';
+import { hyp } from '../../util.js';
 
 export function promote(sim, u) {
   const [v1, v2] = COMBAT.vetKills;
@@ -25,7 +26,7 @@ export function credit(sim, id, kills) {
 }
 
 export function litAt(sim, x, z) {
-  for (const b of sim.state.ents.buildings) if (b.type === 'floodlight' && b.built && Math.hypot(b.x - x, b.z - z) < BUILDINGS.floodlight.radius) return true;
+  for (const b of sim.state.ents.buildings) if (b.type === 'floodlight' && b.built && hyp(b.x - x, b.z - z) < BUILDINGS.floodlight.radius) return true;
   return false;
 }
 
@@ -39,7 +40,7 @@ export function effectiveRange(sim, w, x, z) {
 }
 
 function depotNear(sim, x, z) {
-  for (const b of sim.state.ents.buildings) if (b.type === 'depot' && b.built && Math.hypot(b.x - x, b.z - z) < BUILDINGS.depot.radius) return true;
+  for (const b of sim.state.ents.buildings) if (b.type === 'depot' && b.built && hyp(b.x - x, b.z - z) < BUILDINGS.depot.radius) return true;
   return false;
 }
 
@@ -61,7 +62,7 @@ export function crowdTarget(sim, x, z, W) {
   let best = null, bc = 0, n = 0;
   sim.deadHash.query(x, z, W.range, (d) => {
     if (n++ > 60 || d.gone || !sim.visible(d.x, d.z)) return;
-    if (Math.hypot(d.x - x, d.z - z) < W.minRange) return;
+    if (hyp(d.x - x, d.z - z) < W.minRange) return;
     let c = 0;
     sim.deadHash.query(d.x, d.z, W.radius, () => { c++; });
     if (c > bc) { bc = c; best = d; }
@@ -88,7 +89,7 @@ export function lobShell(sim, x, z, w, t, by, vet = 0) {
 export function fire(sim, from, w, target, { vet = 0, shooter = null } = {}) {
   const s = sim.state, W = WEAPONS[w];
   let dmg = W.dmg * COMBAT.vetBonus[vet] * (sim.hasTech('k1') ? 1.3 : 1);
-  const dist = Math.hypot(target.x - from.x, target.z - from.z);
+  const dist = hyp(target.x - from.x, target.z - from.z);
   let melee = !!W.melee;
   if (!melee && W.ammo > 0) {
     let cost = W.ammo * (sim.hasTech('k2') ? 0.75 : 1);
@@ -132,11 +133,11 @@ export function explode(sim, x, z, radius, dmg, { friendly = 0.5, structDmg = 0,
     if (d.hp <= 0) { killDead(sim, d, kind === 'napalm' ? 'fire' : 'blast'); kills++; }
   });
   if (friendly) for (const u of s.ents.units) {
-    const dd = Math.hypot(u.x - x, u.z - z);
+    const dd = hyp(u.x - x, u.z - z);
     if (dd < radius && !u.air) u.hp -= dmg * friendly * (1 - dd / (radius * 1.5));
   }
-  if (friendly) for (const r of s.ents.refugees) if (Math.hypot(r.x - x, r.z - z) < radius) r.hp = 0;
-  if (structDmg) for (const b of s.ents.buildings) if (Math.hypot(b.x - x, b.z - z) < radius + b.size / 2) b.hp -= structDmg;
+  if (friendly) for (const r of s.ents.refugees) if (hyp(r.x - x, r.z - z) < radius) r.hp = 0;
+  if (structDmg) for (const b of s.ents.buildings) if (hyp(b.x - x, b.z - z) < radius + b.size / 2) b.hp -= structDmg;
   if (noise) makeNoise(sim, x, z, noise);
   sim.emit('explode', { x, z, r: radius, kind });
   return kills;

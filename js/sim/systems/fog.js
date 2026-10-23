@@ -1,8 +1,9 @@
 // Fog of war. Home territory is always visible (civilians report sightings). Abroad, you see what your
 // units, structures, border posts, radar and recon flights can see. `state.fog.seen` remembers tiles.
-import { VISION, WEATHER } from '../../config/balance.js';
+import { VISION, WEATHER, PACE } from '../../config/balance.js';
 import { BUILDINGS } from '../../config/buildings.js';
 import { UNITS } from '../../config/units.js';
+import { hordeArriving } from './world.js';
 
 function stamp(vis, N, x, z, r) {
   const r2 = r * r;
@@ -63,7 +64,7 @@ export function fogSystem(sim) {
   // Horde contact: the first time any member is seen, report size, composition and ETA.
   const s = sim.state;
   for (const h of s.hordes) {
-    if (h.phase === 'rumour' || h.phase === 'destroyed') continue;
+    if (h.phase === 'rumour' || h.phase === 'destroyed' || h.phase === 'dispersed') continue;
     let seen = null, members = 0, best = Infinity, inside = null;
     for (const z of s.ents.dead) {
       if (z.horde !== h.id || z.gone) continue;
@@ -74,10 +75,17 @@ export function fogSystem(sim) {
       if (sim.nav.dist[k] < best) best = sim.nav.dist[k];
     }
     h.members = members;
-    const total = Object.values(h.comp).reduce((a, b) => a + b, 0);
-    if (h.spawned >= total && members === 0) {
+    const spawning = hordeArriving(sim, h);
+    if (!spawning && members === 0) {
       h.phase = 'destroyed';
       sim.alert('hordeDestroyed', `The horde from ${h.name} has been destroyed.`, h.x, h.z, 'good');
+      continue;
+    }
+    // Broken (the tutorial's horde excepted: its lesson ends when the last one falls): the few left are stragglers.
+    if (!spawning && members <= h.spawned * PACE.disperse && s.mode !== 'tutorial') {
+      h.phase = 'dispersed';
+      for (const z of s.ents.dead) if (z.horde === h.id) z.horde = 0;
+      sim.alert('hordeDestroyed', `The horde from ${h.name} is broken; ${members === 1 ? 'its last one scatters' : `its last ${members} scatter`}.`, h.x, h.z, 'good');
       continue;
     }
     if (inside && !h.arrived) {
@@ -93,5 +101,5 @@ export function fogSystem(sim) {
       sim.emit('hordeContact', { id: h.id, x: seen.x, z: seen.z });
     }
   }
-  s.hordes = s.hordes.filter((h) => h.phase !== 'destroyed' || s.time - h.spawnAt < 48);
+  s.hordes = s.hordes.filter((h) => (h.phase !== 'destroyed' && h.phase !== 'dispersed') || s.time - h.spawnAt < 48);
 }

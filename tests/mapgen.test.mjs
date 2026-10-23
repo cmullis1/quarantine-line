@@ -124,3 +124,72 @@ test('mountain ridges are continuous walls broken only at road passes', () => {
     assert.ok(big <= 1, `${scenario} ${seed}: ridge split into ${big} pieces`);
   }
 });
+
+// 4-connected components of the tiles `pred` accepts, as arrays of tile indices.
+function components4(map, pred) {
+  const N = map.N, seen = new Uint8Array(N * N), out = [];
+  for (let k = 0; k < N * N; k++) {
+    if (!pred(k) || seen[k]) continue;
+    const comp = [], stack = [k];
+    seen[k] = 1;
+    while (stack.length) {
+      const q = stack.pop();
+      comp.push(q);
+      const i = q % N, j = (q / N) | 0;
+      for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ni = i + di, nj = j + dj;
+        if (ni < 0 || nj < 0 || ni >= N || nj >= N) continue;
+        const nk = nj * N + ni;
+        if (pred(nk) && !seen[nk]) { seen[nk] = 1; stack.push(nk); }
+      }
+    }
+    out.push(comp);
+  }
+  return out;
+}
+
+const riverMaps = () => [['campaign', generateMap({ scenario: 'campaign' })],
+  ...Array.from({ length: 30 }, (_, s) => [`sandbox ${s + 1}`, generateMap({ scenario: 'sandbox', seed: s + 1 })])];
+
+test('rivers are 4-connected channels: no tile hangs on a corner, one river per map', () => {
+  for (const [label, map] of riverMaps()) {
+    const N = map.N, water = (k) => map.terrain[k] === TER.RIVER || map.terrain[k] === TER.LAKE || map.terrain[k] === TER.SEA;
+    for (let k = 0; k < N * N; k++) {
+      if (map.terrain[k] !== TER.RIVER) continue;
+      const i = k % N, j = (k / N) | 0;
+      const linked = [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => {
+        const ni = i + di, nj = j + dj;
+        return ni < 0 || nj < 0 || ni >= N || nj >= N || water(nj * N + ni) || map.bridge[nj * N + ni];
+      });
+      assert.ok(linked, `${label}: river tile (${i},${j}) touches the rest only at a corner`);
+    }
+    // A lake the river runs through joins it; any river tiles outside that one body would be a broken piece.
+    const bodies = components4(map, (k) => map.terrain[k] === TER.RIVER || map.terrain[k] === TER.LAKE)
+      .filter((c) => c.some((k) => map.terrain[k] === TER.RIVER));
+    assert.ok(bodies.length <= 1, `${label}: river split into ${bodies.length} pieces`);
+  }
+});
+
+test('bridges: every bridge tile is a road, and each crossing is one run over water that ends on a bank road', () => {
+  for (const [label, map] of riverMaps()) {
+    const N = map.N;
+    for (let k = 0; k < N * N; k++) {
+      if (!map.bridge[k]) {
+        const i = k % N, j = (k / N) | 0;
+        const decked = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([di, dj]) => i + di >= 0 && j + dj >= 0 && i + di < N && j + dj < N && map.bridge[(j + dj) * N + i + di]).length;
+        assert.ok(!map.road[k] || decked < 2, `${label}: road tile ${k} is a gap between two bridge tiles`);
+        continue;
+      }
+      assert.equal(map.road[k], 1, `${label}: bridge tile ${k} is a road tile`);
+    }
+    for (const run of components4(map, (k) => map.bridge[k] === 1)) {
+      // A bank tile between two bridge tiles of a stepping road is decked too, but every run crosses real water.
+      assert.ok(run.some((k) => map.terrain[k] === TER.RIVER || map.terrain[k] === TER.LAKE), `${label}: bridge run at tile ${run[0]} crosses no water`);
+      const banks = run.filter((k) => [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => {
+        const ni = (k % N) + di, nj = ((k / N) | 0) + dj;
+        return ni >= 0 && nj >= 0 && ni < N && nj < N && map.road[nj * N + ni] && !map.bridge[nj * N + ni];
+      }));
+      assert.ok(banks.length >= 1, `${label}: bridge run at tile ${run[0]} reaches no bank road`);
+    }
+  }
+});

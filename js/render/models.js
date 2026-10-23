@@ -134,13 +134,14 @@ export function makeHighWall() {
 
 export function makeGate() {
   const g = new THREE.Group();
-  box(g, 0.22, 1.25, 1.0, PALETTE.concrete, -0.39, 0, 0);
-  box(g, 0.22, 1.25, 1.0, PALETTE.concrete, 0.39, 0, 0);
+  // The pillars stop under the lintel: running on up inside it, their sides shared its sides' plane.
+  box(g, 0.22, 1.08, 1.0, PALETTE.concrete, -0.39, 0, 0);
+  box(g, 0.22, 1.08, 1.0, PALETTE.concrete, 0.39, 0, 0);
   box(g, 1.0, 0.18, 1.0, 0x7c7b74, 0, 1.08, 0);
   const door = new THREE.Group();
   box(door, 0.56, 0.95, 0.12, 0x4a5568, 0, 0, 0);
   for (let i = 0; i < 4; i++) box(door, 0.58, 0.05, 0.13, 0x2e3644, 0, 0.12 + i * 0.22, 0);
-  box(door, 0.56, 0.08, 0.13, PALETTE.gold, 0, 0.88, 0);
+  box(door, 0.58, 0.08, 0.13, PALETTE.gold, 0, 0.88, 0);
   g.add(door);
   g.userData.door = door;
   g.userData.height = 1.2;
@@ -227,7 +228,7 @@ export function makeMinefield() {
     cyl(g, 0.07, 0.08, 0.04, 6, 0x4a4a3a, Math.cos(a) * r, 0, Math.sin(a) * r);
   }
   box(g, 0.03, 0.3, 0.03, 0x6a5a40, 0.4, 0, 0.4);
-  box(g, 0.18, 0.12, 0.01, PALETTE.red, 0.4, 0.22, 0.41);
+  box(g, 0.18, 0.12, 0.01, PALETTE.red, 0.4, 0.22, 0.42);
   return g;
 }
 
@@ -271,7 +272,7 @@ export function makeFarm() {
   box(tractor, 0.16, 0.12, 0.26, 0x3a7a3a, 0, 0.06, 0);
   box(tractor, 0.12, 0.12, 0.1, 0x2a5a2a, 0, 0.16, -0.05);
   cyl(tractor, 0.07, 0.07, 0.04, 6, 0x222222, 0.1, 0.03, -0.07);
-  tractor.position.set(-0.2, 0.04, 0.3);
+  tractor.position.set(-0.19, 0.04, 0.3); // astride a crop row, its sides clear of the row's
   g.add(tractor);
   g.userData.tractor = tractor;
   g.userData.crops = crops;
@@ -507,22 +508,75 @@ export function makeScaffold(size) {
 }
 
 // The plate under every player building but the wall lines, so your buildings read as yours and town houses do
-// not: the footprint plus 0.15, 0.04 high, a dark slab rimmed in the gold of the border line.
+// not: the footprint plus 0.15, a dark slab rimmed in the gold of the border line. 0.02 high, under every model's
+// base (most are 0.04): a plate as high as a base shares its plane and z-fights through it.
 const PLATE_GOLD = new THREE.MeshBasicMaterial({ color: 0xf0c94a });
-const PLATE_RIM = 0.06;
+const PLATE_RIM = 0.06, PLATE_H = 0.02;
 export function makePlate(size) {
   const g = new THREE.Group();
   const s = size + 0.15, inner = s - PLATE_RIM * 2;
-  box(g, inner, 0.04, inner, 0x23272a).castShadow = false;
+  box(g, inner, PLATE_H, inner, 0x23272a).castShadow = false;
   const rim = cached(`plate${size}`, () => {
     const outline = new THREE.Shape([[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([x, y]) => new THREE.Vector2((x * s) / 2, (y * s) / 2)));
     outline.holes.push(new THREE.Path([[-1, -1], [-1, 1], [1, 1], [1, -1]].map(([x, y]) => new THREE.Vector2((x * inner) / 2, (y * inner) / 2))));
-    const geo = new THREE.ExtrudeGeometry(outline, { depth: 0.04, bevelEnabled: false });
+    const geo = new THREE.ExtrudeGeometry(outline, { depth: PLATE_H, bevelEnabled: false });
     geo.rotateX(-Math.PI / 2);
     return geo;
   });
   g.add(new THREE.Mesh(rim, PLATE_GOLD));
   return g;
+}
+
+// ---------------------------------------------------------------- baking
+
+// Static scenery drawn as one mesh: each part's geometry moved into place and merged, its material's colour
+// carried per vertex. A house is ~6 meshes and a town hundreds; baked, a town is one draw call (and one shadow call).
+export const bakedMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+
+// Every mesh under `root`, with `root`'s own transform, as { geo, m, material }.
+export function partsOf(root, out = []) {
+  root.updateMatrixWorld(true);
+  root.traverse((o) => { if (o.isMesh) out.push({ geo: o.geometry, m: o.matrixWorld.clone(), material: o.material }); });
+  return out;
+}
+
+const _p = new THREE.Vector3(), _nv = new THREE.Vector3(), _nm = new THREE.Matrix3();
+// One non-indexed geometry from parts; colour is `part.color` or the material's. `extra` adds per-part
+// attributes: { name: [itemSize, (part) => values] }.
+export function mergeParts(parts, extra = {}) {
+  let n = 0;
+  for (const p of parts) n += p.geo.index ? p.geo.index.count : p.geo.attributes.position.count;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), col = new Float32Array(n * 3);
+  const ex = Object.entries(extra).map(([name, [size, get]]) => ({ name, size, get, arr: new Float32Array(n * size) }));
+  let o = 0;
+  for (const p of parts) {
+    const idx = p.geo.index, P = p.geo.attributes.position, N = p.geo.attributes.normal, c = p.color || p.material.color;
+    const cnt = idx ? idx.count : P.count, vals = ex.map((e) => e.get(p));
+    _nm.getNormalMatrix(p.m);
+    for (let i = 0; i < cnt; i++, o++) {
+      const v = idx ? idx.getX(i) : i;
+      _p.fromBufferAttribute(P, v).applyMatrix4(p.m);
+      _nv.fromBufferAttribute(N, v).applyNormalMatrix(_nm);
+      pos[o * 3] = _p.x; pos[o * 3 + 1] = _p.y; pos[o * 3 + 2] = _p.z;
+      nor[o * 3] = _nv.x; nor[o * 3 + 1] = _nv.y; nor[o * 3 + 2] = _nv.z;
+      col[o * 3] = c.r; col[o * 3 + 1] = c.g; col[o * 3 + 2] = c.b;
+      for (let k = 0; k < ex.length; k++) for (let s = 0; s < ex[k].size; s++) ex[k].arr[o * ex[k].size + s] = vals[k][s];
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  for (const e of ex) g.setAttribute(e.name, new THREE.BufferAttribute(e.arr, e.size));
+  g.computeBoundingSphere();
+  return g;
+}
+
+// A baked mesh that casts and takes shadows like the parts it replaces.
+export function bakedMesh(geo, material = bakedMat) {
+  const m = new THREE.Mesh(geo, material);
+  m.castShadow = m.receiveShadow = true;
+  return m;
 }
 
 // ---------------------------------------------------------------- towns
@@ -660,13 +714,22 @@ export function makeLandmark(kind, winMat) {
   return g;
 }
 
-export function makeBridge(dirX) {
+// One tile of a bridge deck. The deck fills the whole tile so neighbouring tiles of a crossing join into one
+// continuous deck whichever way the road turns. `sides` maps e/w/s/n (+x, -x, +z, -z) to 'rail' (open edge), 'abut'
+// (a bank where the road leaves the bridge) or nothing (the deck carries on into the next bridge tile).
+export function makeBridgeTile(sides) {
   const g = new THREE.Group();
-  box(g, 1.02, 0.12, 0.9, 0x8a7a64, 0, -0.06, 0);
-  box(g, 1.02, 0.12, 0.06, 0x6a5a48, 0, 0.06, 0.45);
-  box(g, 1.02, 0.12, 0.06, 0x6a5a48, 0, 0.06, -0.45);
-  box(g, 0.14, 0.6, 0.14, 0x7a6a54, 0, -0.62, 0);
-  g.rotation.y = dirX ? 0 : Math.PI / 2;
+  box(g, 1, 0.12, 1, 0x8a7a64, 0, -0.09, 0);
+  for (const [dx, dz] of [[-0.4, -0.4], [0.4, -0.4], [-0.4, 0.4], [0.4, 0.4]]) box(g, 0.1, 0.6, 0.1, 0x7a6a54, dx, -0.62, dz);
+  const dirs = { e: [1, 0], w: [-1, 0], s: [0, 1], n: [0, -1] };
+  for (const [key, [dx, dz]] of Object.entries(dirs)) {
+    const kind = sides[key];
+    if (!kind) continue;
+    const alongX = dx === 0, len = 1;
+    if (kind === 'rail') box(g, alongX ? len : 0.06, 0.12, alongX ? 0.06 : len, 0x6a5a48, dx * 0.47, 0.03, dz * 0.47);
+    // An abutment stands 0.02 proud of the deck's sides and 0.01 past its end, clear of the posts: no shared planes.
+    else box(g, alongX ? len + 0.04 : 0.15, 0.6, alongX ? 0.15 : len + 0.04, 0x8a867c, dx * 0.435, -0.54, dz * 0.435);
+  }
   return g;
 }
 

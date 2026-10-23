@@ -10,6 +10,13 @@ export function trueTrust(text, mult) {
 export const $ = (s, root = document) => root.querySelector(s);
 export const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 
+// Writes that skip what the page already shows: rewriting the same text or style still costs a style and layout
+// pass. Each remembers its last value on the element, so an element must be written only through them.
+export function setText(el, v) { if (el._tx !== v) { el.textContent = v; el._tx = v; } }
+export function setHtml(el, v) { if (el._hx !== v) { el.innerHTML = v; el._hx = v; } }
+export function setStyle(el, k, v) { const c = (el._sx ||= {}); if (c[k] !== v) { el.style[k] = v; c[k] = v; } }
+export function setClass(el, v) { if (el._cx !== v) { el.className = v; el._cx = v; } }
+
 export const RES_META = {
   funds: { label: 'Funds', icon: '💰' },
   food: { label: 'Food', icon: '🍞' },
@@ -74,7 +81,11 @@ export function tipOn(el, fn) {
 // A weapon's reach: from its minimum (indirect fire) to its range.
 export const reach = (w) => `${w.minRange ? `${w.minRange}–` : ''}${w.range}`;
 
+// Whole hours, rounded up. The clock steps in 0.05 h, so a time 14 h ahead can read 14.000000000000002: drop the
+// float noise first, or a countdown shows one hour too many.
+export const ceilHours = (h) => Math.ceil(h - 1e-6);
+
 export function hours(h) {
   if (h >= 24) return `${Math.floor(h / 24)}d ${Math.round(h % 24)}h`;
-  return `${Math.max(0, Math.ceil(h))}h`;
+  return `${Math.max(0, ceilHours(h))}h`;
 }

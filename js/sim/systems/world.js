@@ -1,6 +1,6 @@
 // Time of day, world infection, and everything that arrives from outside: refugees, the trickle of
-// the dead, telegraphed hordes and sea hordes.
-import { WORLD, HORDE, REFUGEES } from '../../config/balance.js';
+// the dead, telegraphed hordes and sea hordes, paced by the director (build → peak → relax → build).
+import { WORLD, HORDE, REFUGEES, PACE } from '../../config/balance.js';
 import { HORDE_MIX } from '../../config/dead.js';
 import { TER } from '../../config/world.js';
 import { spawnDead, spawnRefugee } from '../entities.js';
@@ -63,6 +63,12 @@ export function scheduleHorde(sim, { size, siteId = null, sea = false, lead = HO
   return h;
 }
 
+// A horde is still arriving while its spawn queue has members left to put into the world. Once the queue is empty
+// its spawning is over, however many of them it managed to spawn (none past MAX_DEAD).
+export function hordeArriving(sim, h) {
+  return h.phase === 'rumour' || sim.state.pending.some((p) => p.horde === h.id);
+}
+
 function onNewDay(sim, day) {
   sim.emit('dawn', { day });
   if (day > 1) sim.alert('day', `Day ${day}. World infection ${sim.state.worldInf.toFixed(1)}%.`, null, null, 'info');
@@ -82,8 +88,46 @@ export function worldSystem(sim, dt) {
     else if (wx.rain && !s.flags.weather?.includes('rain')) sim.alert('weather', 'Rain: shorter sight and range; gunfire carries less far.', null, null, 'info');
     s.flags.weather = tag;
   }
+  if (Math.floor(s.time * 4) !== Math.floor((s.time - dt) * 4)) paceTick(sim);
   if (!s.flags.noSpawns) automaticSpawns(sim, dt, day, wi);
   advanceHordes(sim, dt);
+}
+
+// Hours until the next timed horde: the interval shortens as the days pass, and each difficulty spaces them.
+function hordeInterval(sim) {
+  return sim.range(HORDE.interval[0], HORDE.interval[1]) * Math.max(0.6, 1 - sim.day * HORDE.intervalDecay) * sim.diff.spacing;
+}
+
+// The pacing director, every quarter hour. A peak is a fight: a horde in contact or over the border while any of it
+// is alive or still arriving, or enough dead inside it. When the fight is over comes a relax spell of guaranteed calm
+// (no new horde, no trickle, held cards come, stragglers leave), then build until the next fight. The tutorial runs
+// its own script.
+// What the director reads, shared with the threat chip so the two can never disagree: the horde fighting now (the
+// nearest-arriving one is the chip's business), and how many dead are inside the border.
+export function paceSignals(sim) {
+  const s = sim.state, owner = sim.map.owner, N = sim.N;
+  let inside = 0;
+  for (const z of s.ents.dead) if (!z.gone && owner[Math.floor(z.z) * N + Math.floor(z.x)]) inside++;
+  const fight = s.hordes.some((h) => (h.phase === 'contact' || (h.phase === 'moving' && h.arrived)) && (h.members > 0 || hordeArriving(sim, h)));
+  return { fight, inside };
+}
+
+export function paceTick(sim) {
+  const s = sim.state, p = s.pace;
+  if (s.mode === 'tutorial') return;
+  const { fight, inside } = paceSignals(sim);
+  if (fight || inside >= PACE.peakDead) {
+    if (p.phase !== 'peak') { p.phase = 'peak'; p.t = s.time; }
+  } else if (p.phase === 'peak') {
+    if (inside > PACE.calmDead) return;
+    p.phase = 'relax'; p.t = s.time;
+    // A timed horde already rumoured waits for the calm to end; the story's set pieces (labelled) keep their hour.
+    const end = s.time + sim.diff.relaxHours;
+    for (const h of s.hordes) if (h.phase === 'rumour' && !h.label && h.spawnAt < end) h.spawnAt = end;
+  } else if (p.phase === 'relax' && s.time >= p.t + sim.diff.relaxHours) {
+    p.phase = 'build'; p.t = s.time;
+    s.hordeT = Math.max(s.hordeT, hordeInterval(sim));
+  }
 }
 
 // Refugees, the trickle of the dead and scheduled hordes. Off in training scenarios.
@@ -100,8 +144,10 @@ function automaticSpawns(sim, dt, day, wi) {
     }
   }
 
-  // The trickle of the dead
-  if (s.time > WORLD.trickleStart && sim.chance(Math.min(WORLD.trickleCap, WORLD.trickleBase + wi * WORLD.trickleWorld) * sim.diff.horde * dt)) {
+  // The trickle of the dead and the horde clock run in full while building, not at all in the guaranteed calm, and
+  // mid-fight at the difficulty's peakPace: one landing mid-fight drags the peak out (and the dead pile up with it).
+  const pace = s.pace.phase === 'build' ? 1 : s.pace.phase === 'peak' ? sim.diff.peakPace : 0;
+  if (pace > 0 && s.time > WORLD.trickleStart && sim.chance(Math.min(WORLD.trickleCap, WORLD.trickleBase + wi * WORLD.trickleWorld) * sim.diff.horde * pace * dt)) {
     const site = sim.pick(sim.map.sites);
     const n = 1 + Math.floor(sim.rand() * 3);
     for (let k = 0; k < n; k++) {
@@ -111,14 +157,12 @@ function automaticSpawns(sim, dt, day, wi) {
   }
 
   // Scheduled hordes
-  s.hordeT -= dt;
-  if (s.hordeT <= 0) {
+  if (pace > 0 && (s.hordeT -= dt * pace) <= 0) {
     const size = Math.round(Math.min(HORDE.sizeCap, HORDE.sizeBase + day * HORDE.sizePerDay + wi * HORDE.sizePerWorldInf) * sim.diff.horde);
     const sea = day >= HORDE.seaFromDay && sim.chance(HORDE.seaChance);
     scheduleHorde(sim, { size, sea });
-    s.hordeT = sim.range(HORDE.interval[0], HORDE.interval[1]) * Math.max(0.6, 1 - day * HORDE.intervalDecay);
+    s.hordeT = hordeInterval(sim);
   }
-
 }
 
 // Hordes move from rumour to spawning, and queued spawns drip into the world.

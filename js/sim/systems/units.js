@@ -3,7 +3,7 @@ import { COMBAT } from '../../config/balance.js';
 import { UNITS } from '../../config/units.js';
 import { BUILDINGS, WEAPONS } from '../../config/buildings.js';
 import { removeUnit, removeVehicle, spawnDead } from '../entities.js';
-import { angleTo, turnToward } from '../../util.js';
+import { angleTo, hyp, turnToward } from '../../util.js';
 import { findTarget, fire, effectiveRange, crowdTarget, lobShell, promote } from './combat.js';
 
 const ROAD_SPEED = 1.35;
@@ -51,7 +51,7 @@ function evade(sim, u, E) {
   const ways = [[u.x - near.x, u.z - near.z]];
   if (hq) ways.push([hq.x - u.x, hq.z - u.z]);
   for (const [wx, wz] of ways) {
-    const len = Math.hypot(wx, wz);
+    const len = hyp(wx, wz);
     if (len < 1e-6) continue;
     const dx = wx / len, dz = wz / len, r = openRun(sim, u.x, u.z, dx, dz, E.run);
     if (r < 2) continue;
@@ -83,7 +83,7 @@ export function unitSystem(sim, dt) {
     const engaged = target && u.order === 'amove' && !def.setup && !W.flight;
     if (u.path && u.path.length && u.order !== 'hold' && !engaged) {
       const [tx, tz] = u.path[0];
-      const dx = tx - u.x, dz = tz - u.z, d = Math.hypot(dx, dz);
+      const dx = tx - u.x, dz = tz - u.z, d = hyp(dx, dz);
       const step = (u.air ? def.speed : speedAt(sim, u.x, u.z, def.speed)) * dt;
       if (d <= step) { u.x = tx; u.z = tz; u.path.shift(); }
       else { u.x += (dx / d) * step; u.z += (dz / d) * step; }
@@ -141,7 +141,7 @@ export function unitSystem(sim, dt) {
         u.target = t ? t.id : 0;
         target = t;
       }
-      if (target && (!ready || Math.hypot(target.x - u.x, target.z - u.z) > range + 0.4 || (arcOk && !arcOk(target)))) {
+      if (target && (!ready || hyp(target.x - u.x, target.z - u.z) > range + 0.4 || (arcOk && !arcOk(target)))) {
         target = null; u.target = 0;
       }
       u.attack = !!target;
@@ -161,7 +161,7 @@ export function unitSystem(sim, dt) {
       let heal = 0;
       for (const b of s.ents.buildings) {
         if (!b.built) continue;
-        const d = Math.hypot(b.x - u.x, b.z - u.z);
+        const d = hyp(b.x - u.x, b.z - u.z);
         if (b.type === 'depot' && d < BUILDINGS.depot.radius) heal = Math.max(heal, COMBAT.healDepot);
         if (b.type === 'hospital' && d < 5) heal = Math.max(heal, COMBAT.healHospital);
         if (b.type === 'helipad' && u.air && d < 3) heal = Math.max(heal, COMBAT.healHospital);
@@ -169,7 +169,7 @@ export function unitSystem(sim, dt) {
       if (def.figs) {
         for (const m of medics) {
           const aura = UNITS[m.type].heal;
-          if (Math.hypot(m.x - u.x, m.z - u.z) <= aura.radius) heal = Math.max(heal, aura.rate);
+          if (hyp(m.x - u.x, m.z - u.z) <= aura.radius) heal = Math.max(heal, aura.rate);
         }
       }
       u.hp = Math.min(u.maxHp, u.hp + heal * dt);
@@ -180,7 +180,7 @@ export function unitSystem(sim, dt) {
       let best = null, bd = 3.2;
       for (const b of s.ents.buildings) {
         if (!b.built || b.hp >= b.maxHp) continue;
-        const d = Math.hypot(b.x - u.x, b.z - u.z) - b.size / 2;
+        const d = hyp(b.x - u.x, b.z - u.z) - b.size / 2;
         if (d < bd) { bd = d; best = b; }
       }
       if (best && s.res.funds > 0) {
@@ -216,7 +216,7 @@ export function vehicleSystem(sim, dt) {
     v.moving = false;
     if (v.path && v.path.length) {
       const [tx, tz] = v.path[0];
-      const dx = tx - v.x, dz = tz - v.z, d = Math.hypot(dx, dz);
+      const dx = tx - v.x, dz = tz - v.z, d = hyp(dx, dz);
       const step = speedAt(sim, v.x, v.z, 4) * dt;
       if (d <= step) { v.x = tx; v.z = tz; v.path.shift(); } else { v.x += (dx / d) * step; v.z += (dz / d) * step; }
       if (d > 0.01) v.rot = turnToward(v.rot, angleTo(dx, dz), 6 * dt);

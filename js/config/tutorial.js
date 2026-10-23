@@ -59,18 +59,18 @@ export const TUTORIAL = [
   {
     id: 'checkpoint', title: 'The border', text: 'Refugees and the dead come along the roads. Build a Checkpoint (DEFENCE tab) on the road at the gold border line, here.',
     target: { world: (sim) => { const c = kirsk(sim); return [c.x, c.z]; } },
-    setup: (app) => { const c = kirsk(app.sim); app.jumpTo(c.x, c.z - 2); app.sim.state.res.funds += 200; app.sim.state.res.manpower += 40; app.ui.build.tab = 'defense'; app.ui.build.render(); },
+    setup: (app) => { const c = kirsk(app.sim); app.jumpTo(c.x, c.z - 2); app.sim.state.res.funds += 200; app.sim.state.res.manpower += 40; app.ui.build.tab = 'defense'; app.ui.build.setOpen(true); },
     done: (app) => { const c = kirsk(app.sim); const b = app.sim.buildingAt(c.i, c.j); return !!b && b.type === 'checkpoint'; },
   },
   {
     id: 'wall', title: 'Walls', text: 'Select Wall and drag a line across the pass beside the checkpoint. The dead go around walls if they can, so close the gap.',
     target: { world: (sim) => { const c = kirsk(sim); return [c.x, c.z]; } },
-    setup: (app, m) => { m.n = app.sim.state.ents.buildings.filter((b) => b.type === 'wall').length; },
+    setup: (app, m) => { m.n = app.sim.state.ents.buildings.filter((b) => b.type === 'wall').length; app.ui.build.tab = 'defense'; app.ui.build.setOpen(true); },
     done: (app, m) => app.sim.state.ents.buildings.filter((b) => b.type === 'wall').length >= m.n + 2,
   },
   {
     id: 'tower', title: 'Watchtowers', text: 'Build a Watchtower just behind the wall. Towers shoot anything in range. You can see the range ring while placing.',
-    setup: (app, m) => { m.n = app.sim.state.ents.buildings.filter((b) => b.type === 'tower').length; },
+    setup: (app, m) => { m.n = app.sim.state.ents.buildings.filter((b) => b.type === 'tower').length; app.ui.build.tab = 'defense'; app.ui.build.setOpen(true); },
     done: (app, m) => app.sim.state.ents.buildings.filter((b) => b.type === 'tower').length > m.n,
   },
   {
@@ -155,7 +155,7 @@ export const TUTORIAL = [
   {
     id: 'noise', title: 'Noise', text: 'Gunfire, sirens and explosions draw the dead. A Sound Lure turns that into a tool: build one where you want them to go.',
     target: { dom: '#build' },
-    setup: (app, m) => { app.sim.state.research.done.push('e3'); app.sim.state.res.funds += 60; m.n = app.sim.state.ents.buildings.filter((b) => b.type === 'lure').length; app.ui.build.tab = 'defense'; app.ui.build.render(); },
+    setup: (app, m) => { app.sim.state.research.done.push('e3'); app.sim.state.res.funds += 60; m.n = app.sim.state.ents.buildings.filter((b) => b.type === 'lure').length; app.ui.build.tab = 'defense'; app.ui.build.setOpen(true); },
     done: (app, m) => app.sim.state.ents.buildings.filter((b) => b.type === 'lure').length > m.n,
   },
   {

@@ -2,6 +2,11 @@
 import * as THREE from 'three';
 
 const ELEV = Math.atan(1 / Math.SQRT2); // true isometric
+const SHADOW_TEXEL = 80 / 2048; // the shadow camera's 80-unit square over its 2048 map
+
+// Auto pixel size by zoom: 3 at the default zoom, 2 zoomed out past 1.0, 1 past 0.65, so zooming out sharpens.
+const autoPixel = (zoom) => (zoom >= 1 ? 3 : zoom >= 0.65 ? 2 : 1);
+const AUTO_BAND = 0.02; // a zoom this close to a threshold keeps the size it has, so a zoom resting there never flaps
 
 export class View {
   constructor(canvas, N) {
@@ -11,8 +16,10 @@ export class View {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
     this.view = { x: N / 2, z: N / 2, yaw: Math.PI / 4, yawT: Math.PI / 4, zoom: 1.4, zoomT: 1.4 };
-    this.pixel = 3;
+    this.pixelSetting = 0; // 0 Auto (by zoom), else a fixed 1–4
+    this.pixel = 3; // the size in use
     this.shake = 0;
+    this._r = new THREE.Vector3(); this._u = new THREE.Vector3(); this._d = new THREE.Vector3(); this._c = new THREE.Vector3();
 
     this.hemi = new THREE.HemisphereLight(0xd8e8ff, 0x5a4a35, 1.1);
     this.sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
@@ -33,40 +40,72 @@ export class View {
       hemiDay: new THREE.Color(0xd8e8ff), hemiNight: new THREE.Color(0xa0aac8), hemiRain: new THREE.Color(0x9aa8b8),
     };
     this.resize();
+    this.watchDpr();
+  }
+
+  // A window moved to a monitor with another scale changes devicePixelRatio, often without a resize event.
+  watchDpr() {
+    const mq = matchMedia(`(resolution: ${devicePixelRatio}dppx)`);
+    mq.addEventListener('change', () => { this.resize(); this.watchDpr(); }, { once: true });
   }
 
   // Each game gets a fresh scene; the renderer and lights are reused.
   newScene(N) {
     this.N = N;
-    if (this.scene) this.scene.traverse((o) => { if (o.geometry && !o.geometry.userData?.shared) o.geometry.dispose?.(); });
+    // The old game's geometry, and the instance buffers of every batched mesh (crowd, trees, crops, walls), go with it.
+    if (this.scene) this.scene.traverse((o) => { if (o.geometry && !o.geometry.userData?.shared) o.geometry.dispose?.(); if (o.isInstancedMesh) o.dispose(); });
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x151a1d);
     this.scene.add(this.hemi, this.sun, this.sun.target);
     this.view = { x: N / 2, z: N / 2, yaw: Math.PI / 4, yawT: Math.PI / 4, zoom: 1.4, zoomT: 1.4 };
   }
 
-  resize() {
-    this.renderer.setPixelRatio(1 / this.pixel);
-    this.renderer.setSize(innerWidth, innerHeight);
-    this.updateCamera();
+  resize() { this.applySize(); this.updateCamera(); }
+
+  // The low-res canvas: each render pixel is a whole number of physical pixels (`k`, the pixel size times the
+  // display's scale, rounded), so the stretched picture has no uneven rows or columns; at 175% a 3 is 5 physical
+  // pixels, not 5.25. The canvas covers the window and overhangs it by under one render pixel at the right and bottom.
+  applySize() {
+    const dpr = devicePixelRatio || 1, k = Math.max(1, Math.round(dpr * this.pixel));
+    this.rw = Math.max(1, Math.ceil(Math.round(innerWidth * dpr) / k));
+    this.rh = Math.max(1, Math.ceil(Math.round(innerHeight * dpr) / k));
+    this.cssW = (this.rw * k) / dpr; this.cssH = (this.rh * k) / dpr;
+    this.renderer.setPixelRatio(1);
+    this.renderer.setSize(this.rw, this.rh, false);
+    const st = this.renderer.domElement.style;
+    st.width = `${this.cssW}px`; st.height = `${this.cssH}px`;
   }
 
-  cyclePixel() { this.pixel = this.pixel >= 4 ? 1 : this.pixel + 1; this.resize(); return this.pixel; }
-  setPixel(p) { this.pixel = p; this.resize(); }
+  // 0 = Auto, 1–4 fixed; Auto → 1 → 2 → 3 → 4 → Auto.
+  cyclePixel() { this.setPixel(this.pixelSetting >= 4 ? 0 : this.pixelSetting + 1); return this.pixelSetting; }
+  setPixel(p) {
+    this.pixelSetting = p;
+    this.pixel = p || autoPixel(this.view.zoom);
+    this.resize();
+  }
 
   updateCamera() {
     const v = this.view, cam = this.cam;
-    const aspect = innerWidth / innerHeight;
-    const h = 30 / v.zoom;
-    cam.left = (-h * aspect) / 2; cam.right = (h * aspect) / 2; cam.top = h / 2; cam.bottom = -h / 2;
+    if (!this.pixelSetting) {
+      const lo = autoPixel(v.zoom - AUTO_BAND), hi = autoPixel(v.zoom + AUTO_BAND);
+      if (lo === hi && lo !== this.pixel) { this.pixel = lo; this.applySize(); }
+    }
+    // 30 units over the window's height at zoom 1; the canvas's overhang extends the view at the same scale.
+    const h = ((30 / v.zoom) * this.cssH) / innerHeight, w = (h * this.rw) / this.rh;
+    cam.left = -w / 2; cam.right = w / 2; cam.top = h / 2; cam.bottom = -h / 2;
     const D = 140;
     const sx = this.shake ? (Math.random() - 0.5) * this.shake : 0, sz = this.shake ? (Math.random() - 0.5) * this.shake : 0;
     cam.position.set(v.x + sx + Math.sin(v.yaw) * Math.cos(ELEV) * D, Math.sin(ELEV) * D, v.z + sz + Math.cos(v.yaw) * Math.cos(ELEV) * D);
     cam.lookAt(v.x + sx, 0, v.z + sz);
+    cam.updateMatrixWorld();
+    // Snapped to the render-pixel grid in the camera's own right/up plane, so still scenery moves in whole render
+    // pixels and does not crawl. view.x/z stay as they are (the pan and its tween); only what is drawn snaps, and
+    // picking and projection use this same camera.
+    const px = h / this.rh, R = this._r.setFromMatrixColumn(cam.matrixWorld, 0), U = this._u.setFromMatrixColumn(cam.matrixWorld, 1);
+    const dr = cam.position.dot(R), du = cam.position.dot(U);
+    cam.position.addScaledVector(R, Math.round(dr / px) * px - dr).addScaledVector(U, Math.round(du / px) * px - du);
     cam.updateProjectionMatrix();
     cam.updateMatrixWorld();
-    // Keep the shadow camera centred on what we're looking at.
-    this.sun.target.position.set(v.x, 0, v.z);
   }
 
   // Daylight 0..1 from the hour; returns {day, dusk, night}.
@@ -76,7 +115,14 @@ export class View {
     const dusk = 1 - Math.abs(day - 0.5) * 2;
     const ang = (hour / 24) * Math.PI * 2 - Math.PI / 2;
     const v = this.view, C = this.colors;
-    this.sun.position.set(v.x + Math.cos(ang) * 50, 60, v.z + 30 + Math.sin(ang) * 20);
+    // The shadow camera follows the view, snapped to its own texel grid across the light so shadow edges do not
+    // shimmer while the camera pans.
+    const off = this._d.set(Math.cos(ang) * 50, 60, 30 + Math.sin(ang) * 20), len = off.length();
+    const R = this._r.set(0, 1, 0).cross(off).normalize(), U = this._u.crossVectors(off, R).divideScalar(len);
+    const c = this._c.set(v.x, 0, v.z), cr = c.dot(R), cu = c.dot(U);
+    c.addScaledVector(R, Math.round(cr / SHADOW_TEXEL) * SHADOW_TEXEL - cr).addScaledVector(U, Math.round(cu / SHADOW_TEXEL) * SHADOW_TEXEL - cu);
+    this.sun.target.position.copy(c);
+    this.sun.position.copy(c).add(off);
     this.sun.intensity = (1.25 + 1.25 * day) * (1 - 0.6 * wet);
     this.sun.color.copy(C.sunNight).lerp(C.sunDay, day).lerp(C.sunDusk, dusk * 0.6 * (1 - wet));
     this.hemi.intensity = (0.95 + 0.25 * day) * (1 - 0.3 * wet);
@@ -98,7 +144,7 @@ export class View {
   }
 
   groundAt(sx, sy) {
-    this._ndc.set((sx / innerWidth) * 2 - 1, -(sy / innerHeight) * 2 + 1);
+    this._ndc.set((sx / this.cssW) * 2 - 1, -(sy / this.cssH) * 2 + 1);
     this.ray.setFromCamera(this._ndc, this.cam);
     const p = new THREE.Vector3();
     return this.ray.ray.intersectPlane(this.ground, p) ? p : null;
@@ -106,7 +152,7 @@ export class View {
 
   project(x, y, z) {
     this._v.set(x, y, z).project(this.cam);
-    const sx = ((this._v.x + 1) / 2) * innerWidth, sy = ((1 - this._v.y) / 2) * innerHeight;
+    const sx = ((this._v.x + 1) / 2) * this.cssW, sy = ((1 - this._v.y) / 2) * this.cssH;
     return [sx, sy, sx > -60 && sx < innerWidth + 60 && sy > -40 && sy < innerHeight + 40];
   }
 

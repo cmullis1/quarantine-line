@@ -29,7 +29,7 @@ import { $ } from './ui/dom.js';
 const HOURS_PER_SECOND = HOURS_PER_DAY / REAL_SECONDS_PER_DAY;
 
 const DEFAULT_SETTINGS = {
-  pixel: 3, uiScale: 0, hints: true, pauseOnContact: false, edgePan: false, shake: true, muted: false,
+  pixelSize: 0, uiScale: 0, hints: true, pauseOnContact: false, edgePan: false, shake: true, muted: false,
   volume: { ...DEFAULT_VOLUME },
 };
 
@@ -69,6 +69,10 @@ export class App {
     this.canvas = document.getElementById('view');
     this.view = null;
     addEventListener('resize', () => { this.view?.resize(); this.applySettings(); });
+    // The columns refit when the bottom row or the minimap panel changes size (a selection, the build bar folding),
+    // a frame later so the fit never resizes what is being observed inside the observer's own callback.
+    const refit = new ResizeObserver(() => { if (!this.refitting) { this.refitting = true; requestAnimationFrame(() => { this.refitting = false; this.fitPanels(); }); } });
+    for (const id of ['selection', 'build', 'actions', 'mm-wrap']) refit.observe(document.getElementById(id));
     this.applySettings();
     const unlock = () => { this.audio.unlock(); this.applySettings(); removeEventListener('pointerdown', unlock); removeEventListener('keydown', unlock); };
     addEventListener('pointerdown', unlock);
@@ -87,7 +91,10 @@ export class App {
 
   loadSettings() {
     try {
-      const s = JSON.parse(localStorage.getItem('ql.settings') || '{}');
+      // The old `pixel` (saved as 3 for everyone, the old default) gives way to `pixelSize`, where 0 is Auto: the new
+      // default. A size someone chose on purpose (1, 2 or 4) carries over.
+      const { pixel, ...s } = JSON.parse(localStorage.getItem('ql.settings') || '{}');
+      if (s.pixelSize === undefined && pixel !== undefined && pixel !== 3) s.pixelSize = pixel;
       return { ...DEFAULT_SETTINGS, ...s, volume: { ...DEFAULT_SETTINGS.volume, ...(s.volume || {}) } };
     } catch { return structuredClone(DEFAULT_SETTINGS); }
   }
@@ -95,41 +102,95 @@ export class App {
   applySettings() {
     const st = this.settings;
     for (const [k, v] of Object.entries(st.volume)) this.audio.setVolume(k, k === 'master' && st.muted ? 0 : v);
-    if (this.view && this.view.pixel !== st.pixel) this.view.setPixel(st.pixel);
+    if (this.view && this.view.pixelSetting !== st.pixelSize) this.view.setPixel(st.pixelSize);
     // 0 = automatic: a little larger on wide screens (from 2100 CSS px, which takes in a 4K screen at 175%).
     const ui = st.uiScale || (innerWidth >= 2100 ? 1.15 : innerWidth >= 1700 ? 1.05 : 1);
     document.documentElement.style.setProperty('--ui', ui);
     this.uiZoom = ui;
     this.fitPanels();
   }
-  // Panel heights in zoomed CSS pixels so they stop above the bottom bar at any interface size; the alerts start
-  // below the minimap panel, whose overlay key changes its height.
+  // Column heights in zoomed CSS pixels, measured against the bottom row at the current interface size: the right
+  // panel and the letters stop above whatever of the action bar, build bar and selection sits under them, and the
+  // alerts above the selection, which itself stops short of leaving the alerts less than 120 px.
   fitPanels() {
-    const h = innerHeight / this.uiZoom;
-    const right = document.getElementById('right');
-    if (right) right.style.maxHeight = `${h - 86 - 108}px`;
-    const alerts = document.getElementById('alerts');
-    if (alerts) alerts.style.maxHeight = `${Math.max(120, h - 86 - (document.getElementById('mm-wrap')?.offsetHeight || 250) - 300)}px`;
+    const z = this.uiZoom, h = innerHeight / z, gap = 8;
+    const box = (id) => {
+      const el = document.getElementById(id), r = el?.getBoundingClientRect();
+      return r && r.width ? { l: r.left / z, r: r.right / z, t: r.top / z } : null;
+    };
+    const fit = (id, px) => { const el = document.getElementById(id), v = `${Math.round(px)}px`; if (el && el.style.maxHeight !== v) el.style.maxHeight = v; };
+    const alerts = box('alerts');
+    if (alerts) fit('selection', Math.min(0.42 * h, h - 12 - gap - 120 - alerts.t));
+    const low = ['selection', 'build', 'actions'].map(box).filter(Boolean);
+    const floor = (b) => Math.min(h - 12, ...low.filter((x) => x.l < b.r && x.r > b.l).map((x) => x.t)) - gap;
+    const right = box('right'), letters = box('letters');
+    fit('right', right ? floor(right) - right.t : h - 86 - 108);
+    if (letters) fit('letters', floor(letters) - letters.t);
+    fit('alerts', alerts ? Math.max(120, floor(alerts) - alerts.t) : Math.max(120, h - 86 - 250 - 300));
   }
   toggleMute() { this.settings.muted = !this.settings.muted; this.applySettings(); this.saveSettings(); this.toast(this.settings.muted ? 'Muted' : 'Sound on'); }
 
   // ---------------------------------------------------------------- lifecycle
 
+  // The menu comes first; its demo country is made behind it once the menu is on screen. The view stays blank
+  // meanwhile (a game left for the menu goes at once), and the demo fades in when it is ready.
   mainMenu() {
     this.teardown();
-    this.startDemo();
     this.modals.mainMenu();
+    document.getElementById('boot')?.remove();
+    this.canvas.classList.remove('fade');
+    this.canvas.classList.add('cold');
+    this.demoPrep = { wait: 3, early: true };
   }
 
   // Attract mode: a random sandbox country played by the balanced bot behind the main menu,
-  // fast-forwarded past the quiet opening, with the map revealed and a slow orbiting camera.
-  startDemo() {
-    const sim = new Sim({ mode: 'sandbox', seed: 1 + Math.floor(Math.random() * 9999), difficulty: 'recruit' });
-    const bot = BOTS.balanced(sim);
-    for (let h = 0; h < 24 * 4 && !sim.state.over; h++) { bot.tick(); sim.step(1); sim.drainEvents(); }
+  // fast-forwarded past the quiet opening, with the map revealed and a slow orbiting camera. It is made a step a
+  // frame (a few hours of play at a time) so the menu answers clicks meanwhile; a game started first just drops it.
+  // Returns true when the rest of the frame is to be skipped.
+  prepDemo() {
+    const p = this.demoPrep;
+    // The slow steps wait until the page has loaded and its fonts are in (the menu painted as it will stay), and a
+    // few frames more.
+    const settled = document.readyState === 'complete' && document.fonts.status === 'loaded';
+    if (!settled || p.wait-- > 0) return !!p.early;
+    if (!p.sim) {
+      p.sim = new Sim({ mode: 'sandbox', seed: 1 + Math.floor(Math.random() * 9999), difficulty: 'recruit' });
+      p.bot = BOTS.balanced(p.sim);
+      p.h = 0;
+      p.placed = [];
+      return !!p.early;
+    }
+    const { sim, bot } = p;
+    // Behind the menu the country is built and drawn once, unseen (the view is blank), before it is played forward:
+    // the session's first draw compiles every shader, the longest step of all, and is best over early.
+    if (p.early && !this.demo) {
+      this.start(sim, { demo: true });
+      this.demo = { bot, t: 0 };
+      return true;
+    }
+    if (p.early && !p.drawn) { p.drawn = true; return false; }
+    const t0 = performance.now();
+    // About 12 ms a frame; the hour cap also ends the slice under a test clock that stands still.
+    for (let n = 0; n < 8 && p.h < 24 * 4 && !sim.state.over && performance.now() - t0 < 12; n++, p.h++) {
+      bot.tick(); sim.step(1);
+      // The world already built must still clear the trees under what the bot builds meanwhile.
+      for (const e of sim.drainEvents()) if (e.type === 'placed') p.placed.push(e);
+    }
+    if (p.h < 24 * 4 && !sim.state.over) return !!p.early;
+    this.demoPrep = null;
     sim.state.fog.seen.fill(1);
+    if (p.early) {
+      this.entities.onEvents(p.placed, this.fx);
+      // The world was drawn at hour 0: show the revealed fog at once, and aim the camera at the fighting now.
+      this.fogT = 0;
+      this.demo.focus = null;
+      return false;
+    }
+    // A fallen demo country stays on screen until the next is ready; the new one is first drawn in the next frame,
+    // so building it and drawing it are two long steps, not one.
     this.start(sim, { demo: true });
     this.demo = { bot, t: 0 };
+    return true;
   }
 
   // The defended building with the most visible dead around it, or the capital when all is quiet.
@@ -146,6 +207,7 @@ export class App {
 
   teardown() {
     this.demo = null;
+    this.demoPrep = null;
     this.ui.hide();
     $('#banner').classList.remove('show');
     if (this.tutorial) { this.tutorial.el.remove(); this.tutorial.hl.remove(); this.tutorial = null; }
@@ -187,13 +249,15 @@ export class App {
 
   start(sim, { demo = false } = {}) {
     this.sim = sim;
-    // The last game's overlay materials and wall-tint clones are not in its scene, so replacing the scene misses them.
+    // The last game's overlay and town materials and its batched buildings' instance buffers: replacing the scene
+    // disposes only geometries.
     this.overlays?.dispose();
-    this.entities?.disposeTints();
+    this.towns?.dispose();
+    this.entities?.dispose();
+    this.terrain?.mountains?.mesh.material.dispose();
     if (!this.view) { this.view = new View(this.canvas, sim.N); }
     else this.view.newScene(sim.N);
-    this.view.pixel = this.settings.pixel;
-    this.view.resize();
+    this.view.setPixel(this.settings.pixelSize);
     const scene = this.view.scene;
     this.terrain = new Terrain(scene, sim.map);
     this.towns = new Towns(scene, sim.map);
@@ -207,6 +271,8 @@ export class App {
     const hq = sim.state.ents.buildings.find((b) => b.type === 'hq');
     this.view.view.x = hq ? hq.x : cap.x; this.view.view.z = hq ? hq.z + 2 : cap.z;
     this.view.view.zoom = this.view.view.zoomT = 1.5;
+    // A game started before the menu's demo country was ready shows at once (the demo fades in: see frame()).
+    if (!demo) this.canvas.classList.remove('cold');
     if (demo) { this.paused = false; this.speed = 2; this.applySettings(); return; }
     this.ui.bind();
     this.applySettings();
@@ -286,6 +352,7 @@ export class App {
     requestAnimationFrame((t) => this.frame(t));
     const rdt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
+    if (this.demoPrep && this.prepDemo()) return;
     const sim = this.sim;
     if (!sim || !this.view) { if (this.view) this.view.render(); return; }
     if (this.demo) {
@@ -300,8 +367,8 @@ export class App {
       v.yawT = Math.PI / 4 + this.demo.t * 0.04; v.zoomT = 1.25;
       d.bot.tick();
       if (!sim.state.over) sim.step(rdt * 2 * HOURS_PER_SECOND);
-      // A demo country that falls gives way to a new one after a moment.
-      else if ((d.overT = (d.overT ?? 6) - rdt) <= 0) { this.startDemo(); return; }
+      // A demo country that falls gives way to a new one after a moment (the fallen one stays until it is ready).
+      else if ((d.overT = (d.overT ?? 6) - rdt) <= 0 && !this.demoPrep) this.demoPrep = { wait: 0 };
     }
     const running = !this.demo && !this.paused && !this.modals.open && !sim.state.over && !sim.state.events.decision;
     if (running) sim.step(rdt * this.speed * HOURS_PER_SECOND);
@@ -362,7 +429,7 @@ export class App {
       } else this.overlays.showRange(null, 0, 0);
     }
     this.overlays.showArc(arc);
-    this.crowd.render(this.entities.figureLists([this.ambient.figures()]), t);
+    this.crowd.render(this.entities.figureLists(this.ambient.figures()), t, this.view.cam);
     this.fx.update(vdt);
     this.audio.setListener({ x: v.x, z: v.z, zoom: v.zoom, yaw: v.yaw });
     let deadNearby = 0;
@@ -374,9 +441,12 @@ export class App {
     const dire = direness({ towns: ss.towns, trust: ss.trust, order: ss.order, act: sim.act });
     // The act picks the score's song; the menu demo plays the title anthem (Basic Training is in Act I). Game over
     // holds the score's ending until the game goes on (a retry) or back to the menu.
-    this.audio.update(rdt, { threat, night: light.night > 0.5, deadNearby, paused: !running && !this.demo, rain: this.ambient.raining, dire, act: sim.act, menu: !!this.demo, over: !!sim.state.over });
+    // Not for the one unseen frame drawn while the menu's demo is made (the score would stall right after it).
+    if (!this.demoPrep?.early) this.audio.update(rdt, { threat, night: light.night > 0.5, deadNearby, paused: !running && !this.demo, rain: this.ambient.raining, dire, act: sim.act, menu: !!this.demo, over: !!sim.state.over });
     if (!this.demo) this.ui.update(rdt);
     this.tutorial?.update(rdt);
+    // The demo country fades in once it is ready.
+    if (this.demo && !this.demoPrep && this.canvas.classList.contains('cold')) { this.canvas.classList.add('fade'); this.canvas.classList.remove('cold'); }
     this.view.render();
   }
 }

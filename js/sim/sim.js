@@ -20,7 +20,19 @@ import { politicsSystem } from './systems/politics.js';
 import { fogSystem, recomputeVision } from './systems/fog.js';
 
 // 2: the 144² map (R15.4): a 112² save no longer matches the map rebuilt from its seed.
-export const SAVE_VERSION = 2;
+// 3: rivers carved 4-connected (R16): a save from the old map would put buildings on new river tiles.
+export const SAVE_VERSION = 3;
+
+// The pacing director's state (world.js paceTick): the phase and the game hour it began, and the hour of the last
+// new card.
+const newPace = (t) => ({ phase: 'build', t, card: null });
+
+// Saves from before the pacing director: no pace, no straggler clocks.
+function upgrade(s) {
+  if (!s.pace) s.pace = newPace(s.time);
+  if (!s.events.dueAt) s.events.dueAt = {};
+  for (const z of s.ents.dead) { if (z.seenT === undefined) z.seenT = s.time; if (z.drift === undefined) z.drift = -1; }
+}
 
 function createState({ seed, mode, difficulty, map }) {
   return {
@@ -43,10 +55,11 @@ function createState({ seed, mode, difficulty, map }) {
     ents: { units: [], dead: [], refugees: [], buildings: [], vehicles: [], shells: [], strikes: [] },
     nextId: 1,
     hordes: [], hordeT: 0, pending: [], noises: [], fogT: 0,
+    pace: newPace(START.hour),
     fog: { seen: new Array(map.N * map.N).fill(0) },
     recon: [],
     cabinet: { requests: [], nextAt: 0, history: [] },
-    events: { fired: [], decision: null, queue: [], nextRandom: 0, letters: [] },
+    events: { fired: [], decision: null, queue: [], dueAt: {}, nextRandom: 0, letters: [] },
     news: { fired: [] },
     lessons: { fired: [] },
     stats: {
@@ -80,6 +93,7 @@ export class Sim {
     this.index = new Map();
     this.flowDirty = true;
     this.state = restored || createState({ seed, mode, difficulty, map: this.map });
+    if (restored) upgrade(restored);
     if (!restored) setupScenario(this, opts);
     this.rebuildDerived();
   }

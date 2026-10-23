@@ -6,7 +6,7 @@ import { UNITS } from '../config/units.js';
 import { SPECIALTIES } from '../config/world.js';
 import { workforce, buildingOutput } from '../sim/systems/economy.js';
 import { squadStatus, buildingStatus, HP_COLORS, hpBand } from './overview.js';
-import { $, esc, fmt, RES_META, uiScale } from './dom.js';
+import { $, esc, fmt, RES_META, uiScale, setStyle } from './dom.js';
 
 function townStatus(t) {
   if (t.status === 'fallen') return ['Fallen', 'bad'];
@@ -67,7 +67,7 @@ export class HoverCard {
     this.hide();
   }
 
-  hide() { this.el.style.display = 'none'; this.key = ''; }
+  hide() { setStyle(this.el, 'display', 'none'); this.key = ''; }
 
   update(rdt) {
     const { input, sim } = this.app;
@@ -84,7 +84,7 @@ export class HoverCard {
       this.key = key;
       if (html !== this.html || !shown) {
         if (html !== this.html) { this.el.innerHTML = html; this.html = html; }
-        this.el.style.display = 'block';
+        setStyle(this.el, 'display', 'block');
         this.w = this.el.offsetWidth; this.h = this.el.offsetHeight;
       }
     }
@@ -94,7 +94,7 @@ export class HoverCard {
     let x = m.x + 16, y = m.y + 16;
     if (x + w > innerWidth - 4) x = m.x - 16 - w;
     if (y + hh > innerHeight - 4) y = m.y - 16 - hh;
-    this.el.style.left = Math.max(4, x) / z + 'px';
-    this.el.style.top = Math.max(4, y) / z + 'px';
+    setStyle(this.el, 'left', Math.max(4, x) / z + 'px');
+    setStyle(this.el, 'top', Math.max(4, y) / z + 'px');
   }
 }

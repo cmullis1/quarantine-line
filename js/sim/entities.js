@@ -86,6 +86,8 @@ export function spawnDead(sim, type, x, z, o = {}) {
     speed: sim.range(def.speed[0], def.speed[1]), state: 'path', target: 0, scan: sim.range(0, 0.5),
     inv: null, rise: o.rise ? 1 : 0, wall: -1, stack: 0, wander: null, wanderT: 0, look: Math.floor(sim.rand() * 1e9),
     soldier: !!o.soldier, horde: o.horde || 0, cool: 0, drop: 0, moving: false,
+    // Straggler clock (dead.js): the last hour the player saw it; the site it drifts back to, or -1.
+    seenT: s.time, drift: -1,
   };
   s.ents.dead.push(z0);
   sim.index.set(z0.id, z0);

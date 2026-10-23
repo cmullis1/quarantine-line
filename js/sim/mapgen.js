@@ -259,6 +259,28 @@ function buildMap(P) {
     }
   }
 
+  // The river is carved per tile, so where its centre drifts sideways between two rows the water steps diagonally and
+  // the pieces touch only at corners. Fill each step so consecutive rows share an edge: one continuous channel.
+  if (P.river) {
+    const zAxis = P.river.axis === 'z';
+    const span = (t) => {
+      const c = P.river.pos(t), w = fbm(noise2, t * 0.08, 3) > 0.55 ? 1.1 : 0.6;
+      return [Math.floor(c - w) + 1, Math.ceil(c + w) - 1];
+    };
+    const put = (t, v) => {
+      const i = zAxis ? v : t, j = zAxis ? t : v;
+      if (!inside(i, j)) return;
+      const k = idx(i, j);
+      if (terrain[k] === TER.SEA || terrain[k] === TER.LAKE) return;
+      terrain[k] = TER.RIVER; height[k] = 0;
+    };
+    for (let t = 0; t < N - 1; t++) {
+      const [a, b] = span(t), [c, d] = span(t + 1);
+      if (b < c) for (let v = b; v < c; v++) put(t + 1, v);
+      else if (d < a) for (let v = d + 1; v <= a; v++) put(t + 1, v);
+    }
+  }
+
   // Towns: clear their ground and claim tiles.
   const towns = P.towns.map((t, id) => ({
     id, name: t.name, i: t.i, j: t.j, x: t.i + 0.5, z: t.j + 0.5, r: t.r, pop: t.pop,
@@ -316,6 +338,20 @@ function buildMap(P) {
     }
     sites.push(site);
   });
+
+  // A road that steps diagonally across the river leaves single land tiles between its bridge tiles; deck those too
+  // so the crossing is one run (the deck there rests on the bank; units already walk it as road). So `bridge` marks
+  // decked road, which is usually over water but can stand on a bank tile.
+  for (let again = true; again;) {
+    again = false;
+    for (let k = 0; k < N * N; k++) {
+      if (!road[k] || bridge[k]) continue;
+      const i = k % N, j = (k / N) | 0;
+      let n = 0;
+      for (const [di, dj] of DIRS4) if (inside(i + di, j + dj) && bridge[idx(i + di, j + dj)]) n++;
+      if (n >= 2) { bridge[k] = 1; again = true; }
+    }
+  }
 
   // Border, beach, forest, farmland
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {

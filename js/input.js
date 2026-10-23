@@ -267,7 +267,7 @@ export class Input {
       }
       case 'home': { const cap = this.sim.map.towns.find((t) => t.capital); app.jumpTo(cap.x, cap.z); break; }
       case 'o': app.cycleOverlay(); break;
-      case 'p': app.settings.pixel = this.view.cyclePixel(); app.saveSettings(); break;
+      case 'p': app.settings.pixelSize = this.view.cyclePixel(); app.saveSettings(); break;
       case 'm': app.toggleMute(); break;
       default: break;
     }

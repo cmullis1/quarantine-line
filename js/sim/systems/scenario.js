@@ -1,5 +1,4 @@
 // Starting conditions for each mode.
-import { HORDE } from '../../config/balance.js';
 import { canPlace } from '../commands.js';
 import { makeBuilding, spawnUnit } from '../entities.js';
 
@@ -41,7 +40,7 @@ export function setupScenario(sim, opts = {}) {
     if (p) { u.x = p[0] + 0.5 + (u.x % 1) * 0.2; u.z = p[1] + 0.5; }
   }
 
-  s.hordeT = HORDE.firstHour;
+  s.hordeT = sim.diff.firstHorde;
   s.events.nextRandom = 5 * 24 + sim.range(0, 30);
   s.cabinet.nextAt = 2 * 24 + 8;
 

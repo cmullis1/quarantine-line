@@ -17,6 +17,9 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: #0f1214; color: var(--ink); font: 500 13px/1.4 var(--head); user-select: none; }
 #view { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+/* Blank until the first world is drawn; the menu's demo country fades in behind the menu. */
+#view.cold { opacity: 0; }
+#view.fade { transition: opacity 0.8s ease-out; }
 #view.pick { cursor: pointer; }
 #view.build { cursor: crosshair; }
 #view.target { cursor: cell; }
@@ -37,6 +40,26 @@ h2, h3 { font-family: var(--head); letter-spacing: 0.08em; margin: 0; }
 .clock .d { font-weight: 600; color: var(--accent); }
 .clock .h { color: var(--dim); font-size: 12px; }
 .clock .act { font: 600 12px var(--head); letter-spacing: 0.1em; color: var(--dim); text-transform: uppercase; }
+/* The threat chip beside the clock: the rhythm of the fight in a word and a colour (the word carries it alone too),
+   the place and hours under it, stacked like the clock so it stays narrow in a full bar. */
+.threat { flex: none; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; min-width: 92px; padding: 3px 9px; background: var(--panel-2); border: 1px solid; font: 600 12px/1.15 var(--mono); white-space: nowrap; text-align: left; }
+.threat b { font-size: 13px; font-weight: 700; letter-spacing: 0.06em; }
+.threat span:empty { display: none; }
+.threat.calm { color: var(--good); border-color: rgba(124, 196, 106, 0.55); }
+.threat.rumour { color: var(--warn); border-color: var(--warn); background: #2a2414; }
+.threat.contact { color: #ff9a5a; border-color: #ff9a5a; background: #2e1d14; }
+.threat.breach { color: #1a1a14; border-color: var(--bad); background: var(--bad); }
+.threat.quiet { color: #9cc0f2; border-color: var(--blue); background: #172030; }
+.threat.outbreak { color: #f0b860; border-color: #c08a3a; background: #2a2014; }
+/* Nothing to look at in the calm: no pointer, and no gold hover edge promising a click. */
+.threat.calm, .threat.quiet { cursor: default; }
+#hud .threat.calm:hover { border-color: rgba(124, 196, 106, 0.55); }
+#hud .threat.quiet:hover { border-color: var(--blue); }
+.threat-row { display: flex; gap: 8px; margin-top: 4px; padding-left: 6px; border-left: 2px solid transparent; color: var(--dim); }
+.threat-row.on { border-left-color: var(--accent); color: var(--ink); }
+.threat-k { flex: 0 0 64px; font: 700 12px var(--mono); }
+.threat-k.calm { color: var(--good); } .threat-k.rumour { color: var(--warn); } .threat-k.contact { color: #ff9a5a; }
+.threat-k.breach { color: var(--bad); } .threat-k.quiet { color: #9cc0f2; } .threat-k.outbreak { color: #f0b860; }
 .speeds { display: flex; align-items: center; gap: 2px; }
 .speeds button { background: #262b27; border: 1px solid #3c4239; padding: 4px 7px; font-size: 12px; letter-spacing: -2px; }
 .speeds button.on { background: var(--accent); color: #1a1a14; border-color: var(--accent); }
@@ -213,8 +236,9 @@ h2, h3 { font-family: var(--head); letter-spacing: 0.08em; margin: 0; }
 .ts-ok { color: var(--dim); } .ts-outbreak { color: var(--warn); } .ts-quarantined { color: #8fb0e8; } .ts-sacrifice-zone { color: var(--bad); }
 
 /* ---------- letters ---------- */
-#letters { position: fixed; right: 336px; top: 86px; width: 300px; display: flex; flex-direction: column; gap: 6px; z-index: 6; pointer-events: none; }
-.letter { pointer-events: auto; background: #e9e3cf; color: #1f1d16; padding: 9px 11px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); border-left: 4px solid #8a6a2a; animation: slide 0.3s ease-out; }
+/* Its height is fitted above the bottom row (fitPanels); more letters than fit scroll. */
+#letters { position: fixed; right: 336px; top: 86px; width: 300px; display: flex; flex-direction: column; gap: 6px; z-index: 6; pointer-events: none; overflow-y: auto; scrollbar-width: thin; }
+.letter { flex: none; pointer-events: auto; background: #e9e3cf; color: #1f1d16; padding: 9px 11px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5); border-left: 4px solid #8a6a2a; animation: slide 0.3s ease-out; }
 .letter h4 { margin: 0 0 3px; font: 700 14px var(--head); letter-spacing: 0.04em; display: flex; justify-content: space-between; }
 .letter h4 small { font: 12px var(--mono); color: #7a6a4a; }
 .letter p { margin: 0 0 6px; font: 12.5px/1.35 var(--serif); }
@@ -229,7 +253,10 @@ h2, h3 { font-family: var(--head); letter-spacing: 0.08em; margin: 0; }
 #selection h2 { font-size: 17px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: baseline; }
 #selection h2 small { font: 12px var(--mono); color: var(--dim); }
 #build { margin: 0 auto; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
-.btabs { display: flex; gap: 2px; }
+.btabs { display: flex; align-items: center; gap: 2px; }
+.btabs .hint { margin: 0 0 0 8px; white-space: nowrap; }
+.btabs .hint kbd { font-size: 11px; }
+.btabs .fold { margin-left: auto; background: #222722; border: 1px solid #3a4036; color: var(--dim); font-size: 14px; line-height: 1; }
 .btabs button { background: #222722; border: 1px solid #3a4036; padding: 3px 12px; font-weight: 700; font-size: 12px; letter-spacing: 0.08em; color: var(--dim); }
 .btabs button.on { color: var(--accent); border-color: var(--accent); }
 .bgrid { display: grid; grid-template-columns: repeat(4, 86px); gap: 4px; }
@@ -287,6 +314,8 @@ h2, h3 { font-family: var(--head); letter-spacing: 0.08em; margin: 0; }
 /* ---------- lesson ---------- */
 #lesson { position: fixed; top: 86px; left: 260px; width: 330px; padding: 10px 12px; z-index: 7; display: none; border-left: 3px solid var(--accent); }
 #lesson.show { display: block; animation: slide 0.3s ease-out; }
+#lesson.fade { opacity: 0; transition: opacity 0.6s ease-in; pointer-events: none; }
+#lesson h4 small { font-size: 12px; }
 #lesson h4 { margin: 0 0 4px; font: 700 14px var(--head); letter-spacing: 0.06em; color: var(--accent); display: flex; justify-content: space-between; }
 #lesson p { margin: 0; font-size: 13px; line-height: 1.35; }
 #lesson .x { background: none; border: 0; color: var(--dim); font-size: 14px; }
@@ -361,6 +390,18 @@ h2, h3 { font-family: var(--head); letter-spacing: 0.08em; margin: 0; }
 @keyframes banner { 0% { opacity: 0; transform: translateY(10px); } 12% { opacity: 1; transform: none; } 80% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes line { 0% { width: 0; } 30% { width: 420px; } 100% { width: 420px; } }
 
+/* ---------- loading: index.html paints it before any script runs; the main menu replaces it ---------- */
+#boot { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; background: radial-gradient(ellipse at 50% 42%, #1b201c, #0f1214 70%); }
+#boot .card { width: min(520px, 92vw); }
+/* The automatic interface size the menu card will have (app.js applySettings), before any script has run. */
+@media (min-width: 1700px) { #boot .card { zoom: 1.05; } }
+@media (min-width: 2100px) { #boot .card { zoom: 1.15; } }
+#boot p { margin: 0; color: #5a5640; }
+/* Hazard tape crawling along; moved by transform so it keeps moving while the scripts start up. */
+#boot .load { height: 8px; margin-top: 14px; overflow: hidden; background: #21241c; }
+#boot .load i { display: block; height: 100%; margin-left: -22.63px; background: repeating-linear-gradient(-45deg, #e9b23a 0 8px, #21241c 8px 16px); animation: tape 0.7s linear infinite; }
+@keyframes tape { to { transform: translateX(22.63px); } }
+
 /* ---------- modals ---------- */
 #modal { position: fixed; inset: 0; background: rgba(5, 8, 6, 0.62); display: none; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(2px); }
 #modal.show { display: flex; }
@@ -400,10 +441,11 @@ h2, h3 { font-family: var(--head); letter-spacing: 0.08em; margin: 0; }
 .manual small { font-size: 12px; }
 
 /* The top bar folds by its own width, which the interface scale shrinks (a 4K screen at 150% leaves it ~1460 px):
-   first the brand gets smaller, then it goes, then the rates on the chips, last the speed in words. */
+   first the brand gets smaller, then it goes (early: the threat chip needs the room on a 4K screen at the automatic
+   115%, a ~1900 px bar), then the rates on the chips, last the speed in words. */
 #top { container: topbar / inline-size; }
-@container topbar (max-width: 1960px) { .brand { font-size: 15px; letter-spacing: 0.1em; } }
-@container topbar (max-width: 1860px) { .brand { display: none; } }
+@container topbar (max-width: 2100px) { .brand { font-size: 15px; letter-spacing: 0.1em; } }
+@container topbar (max-width: 1960px) { .brand { display: none; } }
 @container topbar (max-width: 1720px) {
   .chip small { display: none; }
   .meter { min-width: 90px; }

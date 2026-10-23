@@ -1,5 +1,5 @@
 // Research, scripted decisions, letters, cabinet requests, the news wire, acts, and the end of the game.
-import { WIN_DAY } from '../../config/balance.js';
+import { WIN_DAY, PACE } from '../../config/balance.js';
 import { DECISIONS, DECISION_BY_ID, ACTS, ENDINGS, scoreOf } from '../../config/campaign.js';
 import { LETTERS, LETTER_BY_ID } from '../../config/letters.js';
 import { REQUESTS, REQUEST_BY_ID, MINISTERS } from '../../config/cabinet.js';
@@ -27,6 +27,31 @@ function researchTick(sim, dt) {
   }
 }
 
+// ---- Cards wait for a breath ------------------------------------------------------------
+
+// Decision cards, letters and cabinet requests: at most one new card every PACE.cardGap hours, in the order they fell
+// due, and while the director says there is a fight (a peak) none until it has waited PACE.cardHold hours since it fell
+// due. Urgent cards (the story's set pieces) skip all of it. `due`: the hour this card fell due.
+function cardReady(sim, due) {
+  const s = sim.state, p = s.pace;
+  if (p.card !== null && s.time - p.card < PACE.cardGap) return false;
+  if (due > firstDue(sim)) return false;
+  return p.phase !== 'peak' || s.time - due >= PACE.cardHold;
+}
+function cardShown(sim) { sim.state.pace.card = sim.state.time; }
+
+// The earliest hour a waiting card fell due: the decision at the head of the queue (when it was queued), the next
+// letter, the next cabinet request (while fewer than two are open).
+function firstDue(sim) {
+  const s = sim.state, ev = s.events, cab = s.cabinet;
+  let first = Infinity;
+  if (!ev.decision && ev.queue.length) first = Math.min(first, ev.dueAt[ev.queue[0]]);
+  if (s.time >= ev.nextRandom) first = Math.min(first, ev.nextRandom);
+  if (s.time >= cab.nextAt && openRequests(cab).length < 2) first = Math.min(first, cab.nextAt);
+  return first;
+}
+const openRequests = (cab) => cab.requests.filter((r) => r.status === 'offered' || r.status === 'accepted');
+
 // ---- Scripted decisions (modal) --------------------------------------------------------
 
 function decisionTick(sim) {
@@ -37,9 +62,17 @@ function decisionTick(sim) {
     if (d.when && !d.when(sim)) { if (d.day < sim.day - 1) ev.fired.push(d.id); continue; }
     ev.fired.push(d.id);
     ev.queue.push(d.id);
+    ev.dueAt[d.id] = s.time;
   }
+  // A card queued without its hour (a save from before cards waited) fell due now.
+  for (const id of ev.queue) if (ev.dueAt[id] === undefined) ev.dueAt[id] = s.time;
   if (!ev.decision && ev.queue.length) {
-    ev.decision = ev.queue.shift();
+    const urgent = ev.queue.findIndex((id) => DECISION_BY_ID[id].urgent);
+    const n = urgent >= 0 ? urgent : cardReady(sim, ev.dueAt[ev.queue[0]]) ? 0 : -1;
+    if (n < 0) return;
+    ev.decision = ev.queue.splice(n, 1)[0];
+    delete ev.dueAt[ev.decision];
+    cardShown(sim);
     sim.emit('decision', { id: ev.decision });
   }
 }
@@ -62,7 +95,7 @@ export function runDecision(sim, choice) {
 function letterTick(sim) {
   const s = sim.state, ev = s.events;
   if (s.mode === 'tutorial') return;
-  if (s.time >= ev.nextRandom) {
+  if (s.time >= ev.nextRandom && cardReady(sim, ev.nextRandom)) {
     ev.nextRandom = s.time + sim.range(60, 100);
     const open = new Set(ev.letters.map((l) => l.defId));
     const pool = LETTERS.filter((l) => !open.has(l.id) && (!l.when || l.when(sim)));
@@ -72,6 +105,7 @@ function letterTick(sim) {
       if (!p) continue;
       const letter = { id: sim.newId(), defId: def.id, p, until: s.time + 24 };
       ev.letters.push(letter);
+      cardShown(sim);
       sim.emit('letter', { id: letter.id });
       break;
     }
@@ -97,8 +131,8 @@ export function resolveLetter(sim, id, choice, expired = false) {
 function cabinetTick(sim) {
   const s = sim.state, cab = s.cabinet;
   if (s.mode === 'tutorial') return;
-  const active = cab.requests.filter((r) => r.status === 'offered' || r.status === 'accepted');
-  if (s.time >= cab.nextAt && active.length < 2) {
+  const active = openRequests(cab);
+  if (s.time >= cab.nextAt && active.length < 2 && cardReady(sim, cab.nextAt)) {
     cab.nextAt = s.time + sim.range(36, 60);
     const order = ['defence', 'health', 'interior'];
     const start = cab.rot || 0;
@@ -111,6 +145,7 @@ function cabinetTick(sim) {
       cab.rot = (start + n + 1) % 3;
       const req = { id: sim.newId(), defId: def.id, minister, p, status: 'offered', offeredAt: s.time, until: s.time + 12 };
       cab.requests.push(req);
+      cardShown(sim);
       sim.emit('request', { id: req.id });
       sim.alert('request', `${MINISTERS[minister].name} has a request.`, null, null, 'info');
       sim.lesson('cabinet');

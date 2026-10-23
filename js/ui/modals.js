@@ -164,7 +164,7 @@ export class Modals {
     const vol = (k, label) => `<label>${label}<input type="range" min="0" max="100" value="${Math.round(st.volume[k] * 100)}" data-vol="${k}"></label>`;
     this.show(`<div class="card menu settings"><div class="stamp">SETTINGS</div><h1>Settings</h1>
       <label>Interface size<select id="s-ui">${[[0, 'Automatic'], [0.9, '90%'], [1, '100%'], [1.15, '115%'], [1.3, '130%'], [1.5, '150%']].map(([v, l]) => `<option value="${v}" ${st.uiScale === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label>Pixel size (low-res look)<select id="s-pixel">${[1, 2, 3, 4].map((p) => `<option value="${p}" ${st.pixel === p ? 'selected' : ''}>${p}×${p === 3 ? ' (default)' : ''}</option>`).join('')}</select></label>
+      <label>Pixel size (low-res look)<select id="s-pixel">${[[0, 'Auto by zoom (default)'], [1, '1×'], [2, '2×'], [3, '3×'], [4, '4×']].map(([p, l]) => `<option value="${p}" ${st.pixelSize === p ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
       ${vol('master', 'Master volume')}${vol('sfx', 'Effects')}${vol('music', 'Music')}${vol('ambient', 'Ambience')}${vol('ui', 'Interface')}
       <label>Field Manual hints<input type="checkbox" id="s-hints" ${st.hints ? 'checked' : ''}></label>
       <label>Pause when a horde is sighted<input type="checkbox" id="s-pausehorde" ${st.pauseOnContact ? 'checked' : ''}></label>
@@ -172,7 +172,7 @@ export class Modals {
       <label>Screen shake<input type="checkbox" id="s-shake" ${st.shake ? 'checked' : ''}></label>
       <div class="choices"><button data-a="resetvol"><b>Reset sound levels</b></button><button data-a="back"><b>Done</b></button></div></div>`, 'settings');
     $$('[data-vol]', this.el).forEach((r) => r.addEventListener('input', () => { st.volume[r.dataset.vol] = r.value / 100; app.applySettings(); }));
-    $('#s-pixel', this.el).addEventListener('change', (e) => { st.pixel = +e.target.value; app.applySettings(); });
+    $('#s-pixel', this.el).addEventListener('change', (e) => { st.pixelSize = +e.target.value; app.applySettings(); });
     $('#s-ui', this.el).addEventListener('change', (e) => { st.uiScale = +e.target.value; app.applySettings(); });
     $('#s-hints', this.el).addEventListener('change', (e) => { st.hints = e.target.checked; });
     $('#s-pausehorde', this.el).addEventListener('change', (e) => { st.pauseOnContact = e.target.checked; });
@@ -202,15 +202,21 @@ export class Modals {
       buildings: () => `<table>${Object.values(BUILDINGS).filter((b) => b.tab).map((b) => `<tr><td>${b.icon} <b>${b.name}</b></td><td>${esc(b.desc)}</td></tr>`).join('')}</table>`,
       dead: () => `<table>${Object.entries(DEAD).map(([, d]) => `<tr><td><b>${d.name}</b></td><td>HP ${d.hp} · speed ${d.speed[0]}–${d.speed[1]} · bite ${d.dps}/h · walls ${d.wallDmg}/h${d.scream ? ' · screams' : ''}</td></tr>`).join('')}</table>`,
     };
-    const render = (k) => {
-      const body = ref[k] ? ref[k]() : `<h2 style="margin-bottom:6px">${esc(LESSONS[k].title)}</h2><p>${esc(LESSONS[k].text)}</p>${LESSONS[k].do ? `<p><b>${esc(LESSONS[k].do)}</b></p>` : ''}`;
+    // A lesson can go back on screen as a card in a game (Basic Training shows its own panel there instead).
+    const pinnable = !!app.sim && !app.demo && app.sim.state.mode !== 'tutorial';
+    // Lessons have their own buttons (data-l): the "controls" lesson shares its key with the Controls page.
+    const render = (k, lesson = !ref[k]) => {
+      const body = !lesson ? ref[k]() : `<h2 style="margin-bottom:6px">${esc(LESSONS[k].title)}</h2><p>${esc(LESSONS[k].text)}</p>${LESSONS[k].do ? `<p><b>${esc(LESSONS[k].do)}</b></p>` : ''}`;
       this.show(`<div class="card manual"><div class="stamp">FIELD MANUAL</div><h1>Field Manual</h1>
-        <div class="cols"><div class="idx">${['controls', 'units', 'buildings', 'dead'].map((x) => `<button data-k="${x}" class="${x === k ? 'on' : ''}">${x[0].toUpperCase() + x.slice(1)}</button>`).join('')}<hr>
-        ${MANUAL_ORDER.map((x) => `<button data-k="${x}" class="${x === k ? 'on' : ''} ${seen.has(x) ? '' : 'unseen'}">${esc(LESSONS[x].title)}</button>`).join('')}</div>
+        <div class="cols"><div class="idx">${['controls', 'units', 'buildings', 'dead'].map((x) => `<button data-k="${x}" class="${!lesson && x === k ? 'on' : ''}">${x[0].toUpperCase() + x.slice(1)}</button>`).join('')}<hr>
+        ${MANUAL_ORDER.map((x) => `<button data-l="${x}" class="${lesson && x === k ? 'on' : ''} ${seen.has(x) ? '' : 'unseen'}">${esc(LESSONS[x].title)}</button>`).join('')}</div>
         <div>${body}</div></div>
-        <div class="choices"><button data-a="close"><b>Close</b></button></div></div>`, 'manual');
-      $$('[data-k]', this.el).forEach((b) => b.addEventListener('click', () => render(b.dataset.k)));
-      $('[data-a="close"]', this.el).addEventListener('click', () => { this.close(); if (back) back(); else app.paused = wasPaused; });
+        <div class="choices">${lesson && pinnable ? '<button data-a="pin"><b>Pin card</b><small>Keep this lesson on screen until dismissed</small></button>' : ''}<button data-a="close"><b>Close</b></button></div></div>`, 'manual');
+      $$('[data-k]', this.el).forEach((b) => b.addEventListener('click', () => render(b.dataset.k, false)));
+      $$('[data-l]', this.el).forEach((b) => b.addEventListener('click', () => render(b.dataset.l, true)));
+      const leave = () => { this.close(); if (back) back(); else app.paused = wasPaused; };
+      $('[data-a="close"]', this.el).addEventListener('click', leave);
+      $('[data-a="pin"]', this.el)?.addEventListener('click', () => { leave(); app.ui.pinLesson(k); });
     };
     render(key);
   }

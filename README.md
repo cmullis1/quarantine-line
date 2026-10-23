@@ -89,6 +89,11 @@ which checks every request and turns a stale id or bad input into a refusal inst
 - **Pile-ups.** Every step, each wall counts the dead pressing into it plus the stalled crowd behind them that is
   heading its way. When the count reaches the wall's threshold (higher for a High Wall), bodies from the top of
   the pile drop to the far side at a steady rate.
+- **A pacing director.** The war runs in phases: build, peak, relax. A peak starts when a horde makes contact or
+  enough of the dead are inside the border, and ends when the fight is over. Then comes a guaranteed calm (36
+  game hours on Recruit, 20 on Veteran, 8 on Nightmare): no new horde starts, the stray trickle stops, stragglers
+  nobody can see wander back, and story cards wait for it instead of landing mid-fight. A threat chip beside the
+  clock shows the phase and the hours of calm left. `tools/pacing.mjs` measures the share of quiet hours per day.
 - **Hidden infection.** Each town's true case count grows logistically. The reported count is the true count from
   some hours earlier times a detection rate built from laws, hospitals, hazmat teams nearby and public trust;
   censorship makes it later and noisier. Past a threshold the sick turn in the streets, and a fallen town keeps
@@ -97,8 +102,10 @@ which checks every request and turns a stale id or bad input into a refusal inst
   and fractal noise and re-rolled until it is fair: every town reachable from the capital, at least four border
   crossings, and a walkable route from every foreign city to its crossing.
 - **Rendering.** Three.js r160 with an orthographic, true isometric camera. Every model is assembled from
-  primitives at load time, and the scene is drawn at a fraction of screen resolution (P cycles the pixel size)
-  for a chunky low-res look. Soldiers, civilians, refugees and every kind of the dead share one InstancedMesh per
+  primitives at load time, and the scene is drawn at a fraction of screen resolution for a chunky low-res look.
+  Each render pixel covers a whole number of physical pixels at the display's scaling, the pixel size shrinks as
+  you zoom out (P cycles it), and the camera snaps to the render-pixel grid so scenery does not shimmer while
+  panning. Towns, trees, walls and fields are batched, so a day view is about 70 draw calls. Soldiers, civilians, refugees and every kind of the dead share one InstancedMesh per
   body part, about a dozen draw calls for everyone on screen, so hundreds of the dead stay cheap. Tracers,
   particles and decals come from fixed pools. The game ships no image or audio files.
 - **An adaptive score.** Every sound is synthesised with Web Audio. A music director made of pure functions plans
@@ -116,7 +123,7 @@ minimum vertex cut (Dinic's max flow) between foreign land and the living towns,
 `tools/balance.mjs` runs bots x difficulties x seeds across worker threads, so a change that makes the game too
 easy or too hard shows up as numbers. The balanced bot also plays the attract-mode game behind the main menu.
 
-**Tests.** 223 tests run on Node's built-in test runner and cover spread, pathfinding, pile-ups, the economy,
+**Tests.** 244 tests run on Node's built-in test runner and cover spread, pathfinding, pile-ups, the economy,
 laws, saves, the bots and the music. The audio tests run against a Web Audio mock that rejects what a real browser
 rejects (non-finite values, bad times) and records the node graph, so they can check, for example, that the Dire
 mood sings an octave lower, that night darkens every band, and that a stalled frame loop resumes without a burst

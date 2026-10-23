@@ -1,6 +1,6 @@
 // Right-hand panel. COMMAND: Forces (army overview), Economy. GOVERNMENT: Policy (border + laws), Research (tree),
 // Cabinet (requests), News.
-import { $, $$, esc, tipOn, hours, trueTrust, RES_META, rateHtml, fmt } from './dom.js';
+import { $, $$, esc, tipOn, hours, trueTrust, RES_META, rateHtml, fmt, setStyle, setText, ceilHours } from './dom.js';
 import { trustLossMult, computeRates } from '../sim/systems/economy.js';
 import { CHAINS, LAWS, LAW_BY_ID, lawPrereq, lawEffects, BORDER_STANCES } from '../config/laws.js';
 import { BRANCHES, RESEARCH, RESEARCH_BY_ID, researchPrereq } from '../config/research.js';
@@ -65,7 +65,7 @@ export class Panels {
     const s = this.app.sim.state, sim = this.app.sim;
     if (this.tab === 'forces') { this.forcesNow = this.forcesData(); return this.forcesNow.sig; }
     if (this.tab === 'economy') { this.economyNow = this.economyData(); return this.economyNow.sig; }
-    if (this.tab === 'policy') return `${s.border}|${s.laws.join()}|${Math.floor(s.res.authority)}|${sim.day}|${Math.ceil(Math.max(0, (s.cooldowns.border || 0) - s.time))}`;
+    if (this.tab === 'policy') return `${s.border}|${s.laws.join()}|${Math.floor(s.res.authority)}|${sim.day}|${Math.max(0, ceilHours((s.cooldowns.border || 0) - s.time))}`;
     if (this.tab === 'research') return `${s.research.active}|${s.research.done.join()}`;
     if (this.tab === 'cabinet') return s.cabinet.requests.map((r) => `${r.id}${r.status}`).join() + '|' + Math.floor(s.time);
     return (s.news.feed || []).map((n) => n.id).join();
@@ -306,12 +306,13 @@ export class Panels {
     if (this.tab === 'research') {
       $$('[data-prog]').forEach((el) => {
         const t = RESEARCH_BY_ID[el.dataset.prog];
-        el.style.width = Math.min(100, ((s.research.progress[t.id] || 0) / t.cost) * 100) + '%';
+        setStyle(el, 'width', Math.min(100, ((s.research.progress[t.id] || 0) / t.cost) * 100).toFixed(1) + '%');
       });
       const pts = $('#rs-pts');
-      if (pts) pts.textContent = `${Math.floor(s.res.research)} pts · +${s.rates.research.toFixed(1)}/h`;
+      if (pts) setText(pts, `${Math.floor(s.res.research)} pts · +${s.rates.research.toFixed(1)}/h`);
     }
     const offered = s.cabinet.requests.some((r) => r.status === 'offered');
-    $('#right .tabs button[data-t="cabinet"] .dot').hidden = !offered || this.tab === 'cabinet';
+    const dot = $('#right .tabs button[data-t="cabinet"] .dot'), hide = !offered || this.tab === 'cabinet';
+    if (dot.hidden !== hide) dot.hidden = hide;
   }
 }

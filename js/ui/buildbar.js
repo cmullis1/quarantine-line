@@ -1,8 +1,10 @@
-// Build menu (tabs + grid hotkeys) and government actions bar (F1–F4). The ARMY tab trains units without hunting
-// for the right building: a click queues one at the least busy building that trains it (shift-click: five).
+// Build menu (tabs + grid hotkeys) and government actions bar (F1–F4). Closed, the build menu folds to its tab
+// strip; B or a tab opens the grid, B, Esc or its fold button folds it again, and placing leaves it open. The ARMY
+// tab trains units without hunting for the right building: a click queues one at the least busy building that trains
+// it (shift-click: five).
 // A button that cannot be used says why on itself: 🔒 and what unlocks it, a red chip for each resource short, or
 // (actions) a ring with the hours of cooldown left.
-import { $, $$, costHtml, needHtml, tipOn, esc, reach } from './dom.js';
+import { $, $$, costHtml, needHtml, tipOn, esc, reach, setText } from './dom.js';
 import { BUILDINGS, TABS, GRID_KEYS, WEAPONS } from '../config/buildings.js';
 import { UNITS } from '../config/units.js';
 import { ACTIONS } from '../config/actions.js';
@@ -39,11 +41,13 @@ export class BuildBar {
   render() {
     const el = $('#build');
     const grid = this.tab === 'army'
-      ? ARMY.map((type, k) => `<button class="bbtn" data-unit="${type}"><span class="bi">${UNITS[type].icon}</span><span class="bn">${UNITS[type].name}</span>${this.open ? `<kbd>${GRID_KEYS[k]}</kbd>` : ''}<i class="qn"></i><span class="why"></span></button>`).join('')
-      : this.items(this.tab).map(([type, d]) => `<button class="bbtn" data-type="${type}"><span class="bi">${d.icon}</span><span class="bn">${d.name}</span>${this.open ? `<kbd>${GRID_KEYS[d.grid]}</kbd>` : ''}<span class="why"></span></button>`).join('');
-    el.innerHTML = `<div class="btabs">${MENU_TABS.map((t) => `<button data-tab="${t.id}" class="${t.id === this.tab ? 'on' : ''}">${t.label.toUpperCase()}</button>`).join('')}<span class="hint" style="margin:3px 0 0 8px">B: build menu · Tab: next tab</span></div>
-      <div class="bgrid">${grid}</div>`;
-    $$('[data-tab]', el).forEach((b) => b.addEventListener('click', () => { this.tab = b.dataset.tab; this.render(); }));
+      ? ARMY.map((type, k) => `<button class="bbtn" data-unit="${type}"><span class="bi">${UNITS[type].icon}</span><span class="bn">${UNITS[type].name}</span><kbd>${GRID_KEYS[k]}</kbd><i class="qn"></i><span class="why"></span></button>`).join('')
+      : this.items(this.tab).map(([type, d]) => `<button class="bbtn" data-type="${type}"><span class="bi">${d.icon}</span><span class="bn">${d.name}</span><kbd>${GRID_KEYS[d.grid]}</kbd><span class="why"></span></button>`).join('');
+    const hint = this.open ? '<kbd>B</kbd> <kbd>Esc</kbd> close · <kbd>Tab</kbd> next tab' : '<kbd>B</kbd> build menu';
+    el.innerHTML = `<div class="btabs">${MENU_TABS.map((t) => `<button data-tab="${t.id}" class="${this.open && t.id === this.tab ? 'on' : ''}">${t.label.toUpperCase()}</button>`).join('')}<span class="hint">${hint}</span>${this.open ? '<button class="fold" data-fold title="Fold the build menu (B or Esc)">▾</button>' : ''}</div>
+      ${this.open ? `<div class="bgrid">${grid}</div>` : ''}`;
+    $$('[data-tab]', el).forEach((b) => b.addEventListener('click', () => { this.tab = b.dataset.tab; this.setOpen(true); }));
+    $('[data-fold]', el)?.addEventListener('click', () => { this.setOpen(false); if (this.app.input.buildType) this.app.input.setBuild(null); });
     $$('[data-unit]', el).forEach((b) => {
       const type = b.dataset.unit, d = UNITS[type];
       b.addEventListener('click', (e) => this.train(type, e.shiftKey ? 5 : 1));
@@ -52,7 +56,7 @@ export class BuildBar {
         const ready = trainersOf(sim, type).some((x) => x.built);
         const where = `Trained at: ${trainedAt(type).join(', ')}`;
         const lock = unitUnlocked(sim, type) ? '' : `<br><span class="bad">Requires ${researchFor(type)}</span>`;
-        return `<b>${d.name}</b>${this.open ? ` <kbd>${GRID_KEYS[ARMY.indexOf(type)]}</kbd>` : ''}<br>${esc(d.desc)}<br><span class="hint">HP ${d.hp} · range ${reach(w)} · speed ${d.speed} · train ${d.train} h</span><br><span class="${ready ? 'hint' : 'bad'}">${where}${ready ? '' : ' (build one first)'}</span>${lock}<div class="tipcost">${costHtml(d.cost, sim.state.res)} · upkeep ${costHtml(d.upkeep)}/h</div><span class="hint">Click: train one · Shift-click: five</span>`;
+        return `<b>${d.name}</b> <kbd>${GRID_KEYS[ARMY.indexOf(type)]}</kbd><br>${esc(d.desc)}<br><span class="hint">HP ${d.hp} · range ${reach(w)} · speed ${d.speed} · train ${d.train} h</span><br><span class="${ready ? 'hint' : 'bad'}">${where}${ready ? '' : ': build one first'}</span>${lock}<div class="tipcost">${costHtml(d.cost, sim.state.res)} · upkeep ${costHtml(d.upkeep)}/h</div><span class="hint">Click: train one · Shift-click: five</span>`;
       });
     });
     $$('[data-type]', el).forEach((b) => {
@@ -63,7 +67,7 @@ export class BuildBar {
         const lock = !isUnlocked(sim, type) ? `<br><span class="bad">Requires ${RESEARCH_BY_ID[d.unlock].name}</span>` : '';
         const w = d.weapon ? WEAPONS[d.weapon] : null;
         const stats = [`HP ${d.hp}`, `build ${d.build} h`, w ? `range ${w.range}` : null, d.size === 2 ? '2×2' : null].filter(Boolean).join(' · ');
-        return `<b>${d.name}</b>${this.open ? ` <kbd>${GRID_KEYS[d.grid]}</kbd>` : ''}<br>${esc(d.desc)}<br><span class="hint">${stats}</span>${lock}<div class="tipcost">${costHtml(d.cost, sim.state.res)}${d.upkeep ? ` · upkeep ${costHtml(d.upkeep)}/h` : ''}</div>`;
+        return `<b>${d.name}</b> <kbd>${GRID_KEYS[d.grid]}</kbd><br>${esc(d.desc)}<br><span class="hint">${stats}</span>${lock}<div class="tipcost">${costHtml(d.cost, sim.state.res)}${d.upkeep ? ` · upkeep ${costHtml(d.upkeep)}/h` : ''}</div>`;
       });
     });
   }
@@ -137,7 +141,7 @@ export class BuildBar {
       b.classList.toggle('short', ready && open && !afford);
       // Research first: a building alone will not unlock it.
       why(b, !open ? `🔒 ${researchFor(type)}` : !ready ? `🔒 ${trainedAt(type)[0]}` : afford ? '' : needHtml(UNITS[type].cost, s.res));
-      b.querySelector('.qn').textContent = queued ? `+${queued}` : '';
+      setText(b.querySelector('.qn'), queued ? `+${queued}` : '');
     });
     $$('#actions .abtn').forEach((b) => {
       const id = b.dataset.act, a = ACTIONS[id];

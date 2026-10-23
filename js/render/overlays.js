@@ -9,6 +9,10 @@ import { makeGhost } from './models.js';
 const RECHECK = 0.25;
 // Map overlays lie just above the crop rows on farmland (0.06 high), which they would otherwise flicker against.
 const OVER_Y = 0.07;
+// A selection's range lies between the heights solid flat things use near the ground (plates 0.02, bridge decks and
+// some model bases 0.03, border line 0.035, model bases 0.04 and 0.05, crop rows 0.06), so it never shares a plane
+// with one (unit rings share the fill's; neither writes depth, so they do not fight).
+const RANGE_FILL_Y = 0.045, RANGE_Y = 0.055;
 // Economy plates: a band this wide around a producer's gold-rimmed plate, and a fill inside the rim.
 const PLATE_BAND = 0.22;
 
@@ -173,10 +177,10 @@ export class Overlays {
     this.rangeRing.visible = this.rangeFill.visible = on;
     this.minRing.visible = on && min > 0;
     if (!on) return;
-    this.rangeRing.position.set(x, 0.04, z); this.rangeRing.scale.set(r, 1, r);
-    this.rangeFill.position.set(x, 0.035, z); this.rangeFill.scale.set(r, 1, r);
+    this.rangeRing.position.set(x, RANGE_Y, z); this.rangeRing.scale.set(r, 1, r);
+    this.rangeFill.position.set(x, RANGE_FILL_Y, z); this.rangeFill.scale.set(r, 1, r);
     this.rangeRing.material.color.setHex(color);
-    if (min > 0) { this.minRing.position.set(x, 0.04, z); this.minRing.scale.set(min, 1, min); this.minRing.material.color.setHex(color); }
+    if (min > 0) { this.minRing.position.set(x, RANGE_Y, z); this.minRing.scale.set(min, 1, min); this.minRing.material.color.setHex(color); }
   }
 
   // A firing arc ({ x, z, r, rot, arc, ready }) or none (null). Faint until the team is ready to fire.
@@ -192,7 +196,7 @@ export class Overlays {
       this.arcFill.geometry.dispose(); this.arcFill.geometry = fill.geometry();
       this.arcEdge.geometry.dispose(); this.arcEdge.geometry = edge.geometry();
     }
-    for (const m of [this.arcFill, this.arcEdge]) { m.position.set(a.x, 0.04, a.z); m.rotation.y = a.rot; }
+    for (const m of [this.arcFill, this.arcEdge]) { m.position.set(a.x, RANGE_FILL_Y, a.z); m.rotation.y = a.rot; }
     this.arcMat.opacity = a.ready ? 0.1 : 0.04;
     this.arcEdgeMat.opacity = a.ready ? 0.75 : 0.3;
   }

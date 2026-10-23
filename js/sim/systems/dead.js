@@ -1,11 +1,11 @@
 // The dead: follow the flow field to living towns, chase the living they notice, investigate noise,
 // claw at structures, pile up against walls until they spill over.
-import { COMBAT, NOISE, PILEUP, SPREAD, WEATHER } from '../../config/balance.js';
+import { COMBAT, NOISE, PILEUP, SPREAD, WEATHER, PACE } from '../../config/balance.js';
 import { DEAD } from '../../config/dead.js';
 import { BUILDINGS } from '../../config/buildings.js';
 import { UNITS } from '../../config/units.js';
 import { TER } from '../../config/world.js';
-import { angleTo, turnToward } from '../../util.js';
+import { angleTo, clamp, turnToward } from '../../util.js';
 
 // Noise is collected during a tick and resolved here; nearby sources merge.
 export function makeNoise(sim, x, z, r) {
@@ -24,17 +24,68 @@ function resolveNoise(sim) {
   for (const n of list) {
     sim.deadHash.query(n.x, n.z, n.r, (z) => {
       if (z.state === 'chase' || z.state === 'attack' || z.gone) return;
-      if (z.inv && z.inv.until > s.time && Math.hypot(z.inv.x - z.x, z.inv.z - z.z) < Math.hypot(n.x - z.x, n.z - z.z)) return;
+      if (z.inv && z.inv.until > s.time && dist2(z.inv.x - z.x, z.inv.z - z.z) < dist2(n.x - z.x, n.z - z.z)) return;
       z.inv = { x: n.x + sim.range(-1, 1), z: n.z + sim.range(-1, 1), until: s.time + NOISE.investigateHours };
     });
   }
   list.length = 0;
 }
 
-function aggroRange(sim, target) {
-  let r = COMBAT.deadAggro * (sim.night ? COMBAT.nightAggro : 1);
-  if (sim.hasTech('m4') && (target.kind === 'bus' || target.mode || target.type)) r *= 0.3;
-  return r;
+const dist2 = (dx, dz) => dx * dx + dz * dz;
+
+// How far the dead notice, fixed for the tick; the scan's filter reads these instead of a closure per dead.
+let aggroBase = 0, aggroM4 = false, scanZ = null;
+function aggroRange(target) {
+  return aggroM4 && (target.kind === 'bus' || target.mode || target.type) ? aggroBase * 0.3 : aggroBase;
+}
+function noticeable(h) {
+  if (h.gone || h.hp <= 0) return false;
+  const r = aggroRange(h);
+  return dist2(h.x - scanZ.x, h.z - scanZ.z) <= r * r;
+}
+
+const SEP = 0.3, SEP2 = SEP * SEP;
+// Push (nx, nz) away from the dead standing within 0.3 of it; the result is left in pushX/pushZ.
+let pushX = 0, pushZ = 0;
+function separate(hash, self, nx, nz) {
+  const c = hash.cell, n = hash.n, bk = hash.buckets;
+  const x0 = clamp(Math.floor((nx - SEP) / c), 0, n - 1), x1 = clamp(Math.floor((nx + SEP) / c), 0, n - 1);
+  const z0 = clamp(Math.floor((nz - SEP) / c), 0, n - 1), z1 = clamp(Math.floor((nz + SEP) / c), 0, n - 1);
+  const ox = nx, oz = nz;
+  for (let cz = z0; cz <= z1; cz++) {
+    for (let cx = x0; cx <= x1; cx++) {
+      const b = bk[cz * n + cx];
+      for (let i = 0; i < b.length; i++) {
+        const o = b[i];
+        if (o === self) continue;
+        const d2 = dist2(o.x - ox, o.z - oz);
+        if (d2 > SEP2 || d2 < 1e-6) continue;
+        const d = Math.sqrt(d2), push = (SEP - d) * 0.5;
+        nx += ((nx - o.x) / d) * push; nz += ((nz - o.z) / d) * push;
+      }
+    }
+  }
+  pushX = nx; pushZ = nz;
+}
+
+// Stragglers: dead outside the border that chase no one, belong to no horde still on the move or in contact, and
+// have gone unseen. In a relax spell they turn back toward the nearest site and leave; otherwise they leave once
+// long forgotten. Checked at each dead's scan, not every tick. True when this one is gone.
+const liveHordes = new Set();
+function straggle(sim, z, k, relax) {
+  const s = sim.state, map = sim.map;
+  if (sim.vis[k]) z.seenT = s.time;
+  if (z.target || map.owner[k] || (z.horde && liveHordes.has(z.horde))) { z.drift = -1; return false; }
+  const unseen = s.time - z.seenT;
+  if (unseen >= (relax ? PACE.strayRelax : PACE.strayGone)) { z.gone = true; return true; }
+  if (!relax || unseen < PACE.strayHours) { z.drift = -1; return false; }
+  if (z.drift < 0) {
+    let best = Infinity;
+    for (const site of map.sites) { const d = dist2(site.x - z.x, site.z - z.z); if (d < best) { best = d; z.drift = site.id; } }
+  }
+  const home = map.sites[z.drift];
+  if (dist2(home.x - z.x, home.z - z.z) < 2.25) { z.gone = true; return true; }
+  return false;
 }
 
 function reachOf(t) {
@@ -57,6 +108,11 @@ export function deadSystem(sim, dt) {
   }
   const press = new Map(); // wall building id -> [dead]
   const rainy = sim.weather.rain;
+  aggroBase = COMBAT.deadAggro * (sim.night ? COMBAT.nightAggro : 1);
+  aggroM4 = sim.hasTech('m4');
+  const strays = s.mode !== 'tutorial', relax = s.pace.phase === 'relax';
+  liveHordes.clear();
+  for (const h of s.hordes) if (h.phase === 'moving' || h.phase === 'contact') liveHordes.add(h.id);
 
   for (const z of D) {
     z.stack = 0;
@@ -78,7 +134,8 @@ export function deadSystem(sim, dt) {
     z.scan -= dt;
     if (z.scan <= 0) {
       z.scan = sim.range(0.35, 0.7);
-      const t = sim.liveHash.nearest(z.x, z.z, COMBAT.deadAggro * COMBAT.nightAggro, (h) => !h.gone && h.hp > 0 && Math.hypot(h.x - z.x, h.z - z.z) <= aggroRange(sim, h));
+      scanZ = z;
+      const t = sim.liveHash.nearest(z.x, z.z, COMBAT.deadAggro * COMBAT.nightAggro, noticeable);
       z.target = t ? t.id : 0;
       if (t && def.scream && z.cool <= 0) {
         z.cool = def.scream.cooldown;
@@ -86,13 +143,15 @@ export function deadSystem(sim, dt) {
         sim.emit('scream', { id: z.id, x: z.x, z: z.z, r: def.scream.radius });
         sim.lesson('howler');
       }
+      // Gone is cleared from the list at the next tick, silently: it left, nobody killed it.
+      if (strays && straggle(sim, z, k, relax)) { z.moving = false; continue; }
     }
 
     let dx = 0, dz = 0;
     const tg = z.target ? sim.byId(z.target) : null;
     z.state = 'path';
     if (tg && !tg.gone && tg.hp > 0) {
-      const ex = tg.x - z.x, ez = tg.z - z.z, d = Math.hypot(ex, ez);
+      const ex = tg.x - z.x, ez = tg.z - z.z, d = Math.sqrt(ex * ex + ez * ez);
       if (d < reachOf(tg)) {
         let dmg = def.dps * dt;
         if (tg.type === 'apc') dmg *= COMBAT.apcArmor;
@@ -110,8 +169,12 @@ export function deadSystem(sim, dt) {
       if (d < 7) { dx = ex / d; dz = ez / d; z.state = 'chase'; } else z.target = 0;
     }
     if (!dx && !dz && z.inv && z.inv.until > s.time) {
-      const ex = z.inv.x - z.x, ez = z.inv.z - z.z, d = Math.hypot(ex, ez);
+      const ex = z.inv.x - z.x, ez = z.inv.z - z.z, d = Math.sqrt(ex * ex + ez * ez);
       if (d > 0.6) { dx = ex / d; dz = ez / d; z.state = 'investigate'; } else z.inv = null;
+    }
+    if (!dx && !dz && z.drift >= 0) {
+      const home = map.sites[z.drift], ex = home.x - z.x, ez = home.z - z.z, d = Math.sqrt(ex * ex + ez * ez);
+      if (d > 0.1) { dx = ex / d; dz = ez / d; }
     }
     if (!dx && !dz) {
       const nk = nav.next[k];
@@ -125,9 +188,9 @@ export function deadSystem(sim, dt) {
           z.wander = info ? [info.x + sim.range(-info.r, info.r), info.z + sim.range(-info.r, info.r)] : [z.x + sim.range(-2, 2), z.z + sim.range(-2, 2)];
         }
         dx = z.wander[0] - z.x; dz = z.wander[1] - z.z;
-        if (Math.hypot(dx, dz) < 0.2) dx = dz = 0;
+        if (dx * dx + dz * dz < 0.04) dx = dz = 0;
       }
-      const l = Math.hypot(dx, dz);
+      const l = Math.sqrt(dx * dx + dz * dz);
       if (l > 0) { dx /= l; dz /= l; }
     }
     if (!dx && !dz) { z.moving = false; continue; }
@@ -157,20 +220,18 @@ export function deadSystem(sim, dt) {
     }
     if (ni < 0 || nj < 0 || ni >= N || nj >= N || map.terrain[nj * N + ni] === TER.MOUNTAIN) { z.moving = false; z.wander = null; continue; }
     // Separation from neighbours
-    sim.deadHash.query(nx, nz, 0.3, (o, d2) => {
-      if (o === z || d2 < 1e-6) return;
-      const d = Math.sqrt(d2), push = (0.3 - d) * 0.5;
-      nx += ((nx - o.x) / d) * push; nz += ((nz - o.z) / d) * push;
-    });
+    separate(sim.deadHash, z, nx, nz);
+    nx = pushX; nz = pushZ;
     const fi = Math.floor(nx), fj = Math.floor(nz);
     if (fi >= 0 && fj >= 0 && fi < N && fj < N) {
-      const fb = sim.buildingAt(fi, fj);
+      // Still on the square already looked up above: reuse it (b is null or a minefield here).
+      const fb = fi === ni && fj === nj ? b : sim.buildingAt(fi, fj);
       if ((!fb || fb.type === 'minefield') && map.terrain[fj * N + fi] !== TER.MOUNTAIN) { z.x = nx; z.z = nz; }
     }
     z.wall = -1;
     z.moving = true;
     // Barely moved despite wanting to: part of a crush (counts toward a pile-up if it's at a wall).
-    z.stalled = Math.hypot(z.x - ox, z.z - oz) < sp * dt * 0.35;
+    z.stalled = dist2(z.x - ox, z.z - oz) < (sp * dt * 0.35) ** 2;
     z.pdx = dx; z.pdz = dz;
     const wk = Math.floor(z.z) * N + Math.floor(z.x);
     z.y = nav.water(wk) ? -0.62 : 0;
@@ -190,7 +251,7 @@ function pileup(sim, press, dt) {
     const set = new Set(front);
     sim.deadHash.query(b.x, b.z, PILEUP.pressRange, (z) => {
       if (set.has(z) || !z.stalled || z.gone || z.pileOf) return;
-      const wx = b.x - z.x, wz = b.z - z.z, d = Math.hypot(wx, wz) || 1;
+      const wx = b.x - z.x, wz = b.z - z.z, d = Math.sqrt(wx * wx + wz * wz) || 1;
       if ((wx * z.pdx + wz * z.pdz) / d < 0.4) return;
       z.pileOf = bid;
       set.add(z);

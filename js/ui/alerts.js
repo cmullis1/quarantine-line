@@ -1,6 +1,6 @@
 // Alert feed (typed icons, weight bars, merged repeats, click to jump, a clear button), the alarm and the ping,
 // minimap pings, the screen-edge flash and edge-of-screen arrows (threats, and critical alerts not yet looked at).
-import { $, esc, uiScale } from './dom.js';
+import { $, esc, uiScale, setStyle, setClass, setText } from './dom.js';
 import { placeName } from '../sim/places.js';
 import { alertSound } from '../audio/audio.js';
 
@@ -166,25 +166,27 @@ export class Alerts {
       const a = document.createElement('div');
       a.className = 'edge';
       a.innerHTML = '<div class="tri"></div><div class="lbl"></div>';
+      a._tri = a.firstChild; a._lbl = a.lastChild;
       a.addEventListener('click', () => this.app.jumpTo(a._x, a._z));
       el.appendChild(a);
     }
     const b = this.bounds(), cx = (b.l + b.r) / 2, cy = (b.t + b.b) / 2, zoom = uiScale();
-    [...el.children].forEach((a, n) => {
-      const t = threats[n];
-      if (!t) { a.style.display = 'none'; return; }
+    // Every write is skipped when it would not change what is shown (the arrows are placed every frame).
+    for (let n = 0; n < el.children.length; n++) {
+      const a = el.children[n], t = threats[n];
+      if (!t) { setStyle(a, 'display', 'none'); continue; }
       const [sx, sy] = this.app.view.project(t.x, 0, t.z);
-      if (sx > b.l && sx < b.r && sy > b.t && sy < b.b) { a.style.display = 'none'; return; }
+      if (sx > b.l && sx < b.r && sy > b.t && sy < b.b) { setStyle(a, 'display', 'none'); continue; }
       const ang = Math.atan2(sy - cy, sx - cx);
       const k = Math.min((b.r - b.l) / 2 / Math.abs(Math.cos(ang) || 1e-6), (b.b - b.t) / 2 / Math.abs(Math.sin(ang) || 1e-6));
-      a.style.display = 'block';
+      setStyle(a, 'display', 'block');
       // The arrows' layer is zoomed by the interface scale.
-      a.style.left = (cx + Math.cos(ang) * k) / zoom + 'px';
-      a.style.top = (cy + Math.sin(ang) * k) / zoom + 'px';
-      a.className = `edge ${t.cls}${Math.cos(ang) > 0.2 ? ' east' : ''}`;
-      a.querySelector('.tri').style.transform = `rotate(${ang}rad)`;
-      a.querySelector('.lbl').textContent = t.label;
+      setStyle(a, 'left', Math.round(cx + Math.cos(ang) * k) / zoom + 'px');
+      setStyle(a, 'top', Math.round(cy + Math.sin(ang) * k) / zoom + 'px');
+      setClass(a, `edge ${t.cls}${Math.cos(ang) > 0.2 ? ' east' : ''}`);
+      setStyle(a._tri, 'transform', `rotate(${ang.toFixed(3)}rad)`);
+      setText(a._lbl, t.label);
       a._x = t.x; a._z = t.z;
-    });
+    }
   }
 }

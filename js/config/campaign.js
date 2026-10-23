@@ -1,6 +1,7 @@
 // Campaign structure: acts, scripted decisions, endings, score.
 // Decision choices: `effect` is the text shown on the button; `run(sim)` applies it.
 // Every option costs something visible: no free answers.
+// `urgent`: the card starts one of the story's set pieces, so it is shown on its day even mid-fight (politics.js).
 import { hitTrust } from '../sim/systems/economy.js';
 import { scheduleHorde } from '../sim/systems/world.js';
 import { spawnUnit, spawnRefugee } from '../sim/entities.js';
@@ -167,7 +168,7 @@ export const DECISIONS = [
     ],
   },
   {
-    id: 'greatHorde', day: 18, modes: ['campaign'],
+    id: 'greatHorde', day: 18, modes: ['campaign'], urgent: true,
     title: 'Day 18: The Great Horde',
     text: () => 'Satellite passes show a mass of the dead, tens of thousands strong, moving east out of Ulmar. At its pace it reaches our western river line tomorrow.',
     choices: [
@@ -241,7 +242,7 @@ export const DECISIONS = [
     ],
   },
   {
-    id: 'lastPush', day: 46, modes: ['campaign'],
+    id: 'lastPush', day: 46, modes: ['campaign'], urgent: true,
     title: 'Day 46: The Last Push',
     text: () => 'Every horde left on the continent seems to be turning toward the last lights still on: ours. Three columns. They arrive in two days.',
     choices: [

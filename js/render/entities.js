@@ -4,7 +4,7 @@ import { BUILDINGS } from '../config/buildings.js';
 import { UNITS } from '../config/units.js';
 import { DEAD } from '../config/dead.js';
 import { HP_COLORS, hpBand } from '../ui/overview.js';
-import { BUILDING_MODELS, makeScaffold, makePlate, makeAPC, makeGunship, makeMotorbike, makeBus, PALETTE } from './models.js';
+import { BUILDING_MODELS, makeScaffold, makePlate, makeAPC, makeGunship, makeMotorbike, makeBus, PALETTE, partsOf, mergeParts } from './models.js';
 
 const SKIN = [0xe0b48f, 0xc68e66, 0x8d5a3b, 0xf1c9a5, 0xa8714a];
 const ZSKIN = [0x8aa37a, 0x7b9070, 0x9aa88a, 0x6f8566, 0x8f9c80];
@@ -17,7 +17,99 @@ const TOP = new THREE.Box3();
 const HOVER_GLOW = new THREE.Color(SELECT_COLOR).multiplyScalar(0.16);
 // HP bars and, under the defence overlay, walls: green, amber, red.
 const HP_HEX = HP_COLORS.map((c) => new THREE.Color(c));
-const TINT_GLOW = new THREE.Color();
+// Unit rings: over plates (0.02), bridge decks (0.03), the border line (0.035) and most model bases (0.04), and on
+// none of their planes.
+const RING_Y = 0.045;
+
+// Walls, high walls, gates and minefields come by the dozen in long lines: each type is one InstancedMesh (a gate's
+// door a second one, so it can open), not ~10 meshes per tile, each drawn again for the shadow map. Per instance
+// the shader mixes in what material clones gave a single model: the defence overlay's HP-band colour (70% of the
+// way to it, plus a quarter of it as glow so it reads at night) and the hover glow.
+const BATCHED = new Set(['wall', 'highwall', 'gate', 'minefield']);
+const batchMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+batchMat.onBeforeCompile = (shader) => {
+  shader.vertexShader = 'attribute vec4 iTint;\nattribute vec3 iGlow;\nvarying vec3 vGlow;\n' + shader.vertexShader.replace('#include <color_vertex>', `#include <color_vertex>
+    vColor.rgb = mix(vColor.rgb, iTint.rgb, iTint.a);
+    vGlow = iGlow;`);
+  shader.fragmentShader = 'varying vec3 vGlow;\n' + shader.fragmentShader.replace('vec3 totalEmissiveRadiance = emissive;', 'vec3 totalEmissiveRadiance = emissive + vGlow;');
+};
+const _m = new THREE.Matrix4(), _door = new THREE.Matrix4(), _glow = new THREE.Color();
+
+// One building type's instances. A view's slot is its index in every mesh; removing one moves the last into its slot.
+class Batch {
+  constructor(scene, type) {
+    this.scene = scene;
+    const tpl = BUILDING_MODELS[type]();
+    this.ud = tpl.userData;
+    this.top = TOP.setFromObject(tpl).max.y;
+    const door = tpl.userData.door;
+    if (door) tpl.remove(door);
+    this.geos = [mergeParts(partsOf(tpl))];
+    if (door) this.geos.push(mergeParts(partsOf(door)));
+    this.views = [];
+    this.meshes = [];
+    this.grow(32);
+  }
+
+  grow(cap) {
+    const old = this.meshes;
+    this.meshes = this.geos.map((src) => {
+      const g = src.clone();
+      g.setAttribute('iTint', new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4));
+      g.setAttribute('iGlow', new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3));
+      const m = new THREE.InstancedMesh(g, batchMat, cap);
+      m.castShadow = m.receiveShadow = true;
+      this.scene.add(m);
+      return m;
+    });
+    this.cap = cap;
+    for (let k = 0; k < this.views.length; k++) this.write(k);
+    this.count();
+    for (const m of old) { this.scene.remove(m); m.geometry.dispose(); m.dispose(); }
+  }
+
+  count() { for (const m of this.meshes) { m.count = this.views.length; m.boundingSphere = null; } }
+
+  add(v) {
+    if (this.views.length === this.cap) this.grow(this.cap * 2);
+    v.slot = this.views.length;
+    this.views.push(v);
+    this.write(v.slot);
+    this.count();
+  }
+
+  remove(v) {
+    const last = this.views.pop();
+    if (last !== v) { this.views[v.slot] = last; last.slot = v.slot; this.write(last.slot); }
+    v.slot = -1;
+    this.count();
+  }
+
+  // A view's placement (built height sy, door height doorY), HP band and hover into its slot.
+  write(k) {
+    const v = this.views[k];
+    // Trim bands overhang the tile, so neighbours in a line overlap there in the same planes, which fight when their
+    // tints differ (HP bands, hover): every other tile is drawn 0.1% larger, off its neighbours' planes.
+    const g = Math.floor(v.x + v.z) & 1 ? 1.001 : 1;
+    _m.makeScale(g, v.sy * g, g).setPosition(v.x, 0, v.z);
+    this.meshes[0].setMatrixAt(k, _m);
+    if (this.meshes[1]) this.meshes[1].setMatrixAt(k, _door.makeTranslation(0, v.doorY, 0).premultiply(_m));
+    const tint = v.band >= 0 ? HP_HEX[v.band] : null;
+    _glow.setRGB(0, 0, 0);
+    if (tint) _glow.copy(tint).multiplyScalar(0.25);
+    if (v.hot) _glow.add(HOVER_GLOW);
+    for (const m of this.meshes) {
+      const t = m.geometry.attributes.iTint, gl = m.geometry.attributes.iGlow;
+      if (tint) t.setXYZW(k, tint.r, tint.g, tint.b, 0.7); else t.setXYZW(k, 0, 0, 0, 0);
+      gl.setXYZ(k, _glow.r, _glow.g, _glow.b);
+      t.needsUpdate = gl.needsUpdate = m.instanceMatrix.needsUpdate = true;
+      m.boundingSphere = null;
+    }
+  }
+
+  // Frees the instance buffers at once; View.newScene also disposes every InstancedMesh, and a second call is a no-op.
+  dispose() { for (const m of this.meshes) m.dispose(); }
+}
 
 const SQUAD_SLOTS = {
   3: [[0, 0.22], [-0.24, -0.16], [0.24, -0.16]],
@@ -85,14 +177,16 @@ export class Entities {
     this.sirens = new Map();
     this.selected = new Set();
     this.selBuilding = null;
+    this.stamp = 0; // bumped each sync; what is met that frame carries it, and what does not is dropped
+    this.lists = [this.unitFigs, this.deadFigs, this.refFigs, this.corpses, null];
     const rg = new THREE.RingGeometry(0.42, 0.5, 20); rg.rotateX(-Math.PI / 2);
     this.ringGeo = rg;
     this.ringMat = new THREE.MeshBasicMaterial({ color: SELECT_COLOR, transparent: true, opacity: 0.9, depthWrite: false });
     this.rings = [];
     this.hoverKind = null; this.hoverId = null;
-    this.hot = { objs: [], swaps: [], clones: [] };
+    this.hot = { objs: [], swaps: [], clones: [], inst: null };
     this.wallTint = false;
-    this.tints = new Map(); // palette material → its clone per HP band, while walls wear them
+    this.batches = new Map(); // building type → its Batch, made when the first one is placed
     this.hoverRing = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({ color: SELECT_COLOR, transparent: true, opacity: 0.45, depthWrite: false }));
     this.hoverRing.visible = false;
     scene.add(this.hoverRing);
@@ -129,36 +223,6 @@ export class Entities {
     fg.material.color.copy(HP_HEX[hpBand(frac)]);
   }
 
-  // Under the defence overlay a wall wears its HP band's colour: clones of its materials, one per material and band,
-  // shared by every wall in that band. The palette materials are never touched, and each mesh gets its own back.
-  tintWall(b, v) {
-    const band = this.wallTint ? hpBand(b.hp / b.maxHp) : -1;
-    if (v.band === band) return;
-    // The hover glow is cloned from what the wall wore: take it off first, and syncHover relights the new materials.
-    if (this.hot.objs.includes(v.g)) this.unlight();
-    for (const [o, m] of v.tinted) o.material = m;
-    v.tinted = [];
-    if (band >= 0) v.g.traverse((o) => {
-      if (!o.isMesh || !o.material?.color) return;
-      v.tinted.push([o, o.material]);
-      o.material = this.tintMat(o.material, band);
-    });
-    v.band = band;
-  }
-
-  tintMat(m, band) {
-    let row = this.tints.get(m);
-    if (!row) this.tints.set(m, (row = []));
-    if (!row[band]) {
-      const c = m.clone(), col = HP_HEX[band];
-      c.color.lerp(col, 0.7);
-      // A little of the band's own light, so the colour still reads at night.
-      if (c.emissive) { c.emissive.copy(m.emissive).multiplyScalar(m.emissiveIntensity).add(TINT_GLOW.copy(col).multiplyScalar(0.25)); c.emissiveIntensity = 1; }
-      row[band] = c;
-    }
-    return row[band];
-  }
-
   buildingPos(id) { const b = this.sim.byId(id); return b ? { x: b.x, z: b.z } : null; }
 
   // Shots from squads come from one of the squad's figures.
@@ -174,8 +238,8 @@ export class Entities {
       if (f) return { x: f.x + Math.sin(f.rot) * 0.2, y: 0.42, z: f.z + Math.cos(f.rot) * 0.2 };
     }
     const b = this.buildings.get(e.shooter);
-    if (b && b.g.userData.muzzle) {
-      const m = b.g.userData.muzzle;
+    if (b && b.ud.muzzle) {
+      const m = b.ud.muzzle;
       return { x: b.g.position.x + m.x, y: m.y, z: b.g.position.z + m.z };
     }
     return null;
@@ -207,6 +271,7 @@ export class Entities {
 
   sync(rdt, vdt, time, nightF, camQ) {
     const sim = this.sim, s = sim.state;
+    this.stamp++;
     this.syncBuildings(s, vdt, time, nightF, camQ);
     this.syncUnits(s, vdt, time, nightF, camQ);
     this.syncHover();
@@ -220,31 +285,26 @@ export class Entities {
   }
 
   syncBuildings(s, dt, time, nightF, camQ) {
-    const seen = new Set();
+    const st = this.stamp;
+    let met = 0;
     for (const b of s.ents.buildings) {
-      seen.add(b.id);
       let v = this.buildings.get(b.id);
       if (!v || v.type !== b.type) {
         if (v) this.dropBuilding(v);
-        const g = BUILDING_MODELS[b.type]();
-        g.position.set(b.x, 0, b.z);
-        this.scene.add(g);
-        // Wall lines, gates and minefields go without: a plate per tile of a line would read as noise.
-        const plate = BUILDINGS[b.type].wall || b.type === 'minefield' ? null : makePlate(b.size);
-        if (plate) { plate.position.set(b.x, 0, b.z); this.scene.add(plate); }
-        v = { g, type: b.type, scaffold: null, plate, bar: this.makeBar(b.size === 2 ? 1.2 : 0.8), phase: Math.random() * 6, top: TOP.setFromObject(g).max.y, band: -1, tinted: [] };
+        v = this.makeView(b);
         this.buildings.set(b.id, v);
       }
+      v.met = st; met++;
       const g = v.g;
+      let dirty = false; // a batched view's slot needs writing
       if (!b.built) {
         if (!v.scaffold) { v.scaffold = makeScaffold(b.size); v.scaffold.position.set(b.x, 0, b.z); this.scene.add(v.scaffold); v.scaffTop = TOP.setFromObject(v.scaffold).max.y; }
-        g.scale.y = 0.06 + 0.94 * b.progress;
         if (v.scaffold.userData.crane) v.scaffold.userData.crane.rotation.y = time * 0.6;
-      } else {
-        if (v.scaffold) { this.scene.remove(v.scaffold); v.scaffold = null; }
-        g.scale.y = 1;
-      }
-      const ud = g.userData;
+      } else if (v.scaffold) { this.scene.remove(v.scaffold); v.scaffold = null; }
+      const sy = b.built ? 1 : 0.06 + 0.94 * b.progress;
+      if (g) g.scale.y = sy;
+      else if (v.sy !== sy) { v.sy = sy; dirty = true; }
+      const ud = v.ud;
       if (ud.flags) for (const f of ud.flags) f.rotation.y = Math.sin(time * 2.4 + v.phase) * 0.35;
       if (ud.spin) ud.spin.rotation.y = time * 1.6;
       if (ud.dish) ud.dish.rotation.y = Math.sin(time * 0.3 + v.phase) * 0.8;
@@ -257,7 +317,13 @@ export class Entities {
       if (ud.door || ud.boom) {
         let open = false;
         this.sim.liveHash.query(b.x, b.z, 1.4, () => { open = true; });
-        if (ud.door) ud.door.position.y += ((open ? 0.9 : 0) - ud.door.position.y) * Math.min(1, dt * 6);
+        // Doors belong to gates, which are batched: the door's height is the view's, snapped once it is there.
+        if (ud.door) {
+          const to = open ? 0.9 : 0;
+          let y = v.doorY + (to - v.doorY) * Math.min(1, dt * 6);
+          if (Math.abs(to - y) < 0.002) y = to;
+          if (y !== v.doorY) { v.doorY = y; dirty = true; }
+        }
         if (ud.boom) ud.boom.rotation.z += ((open ? 1.2 : 0) - ud.boom.rotation.z) * Math.min(1, dt * 6);
       }
       if (b.built && b.hp < b.maxHp * 0.5 && Math.random() < dt * (b.hp < b.maxHp * 0.25 ? 10 : 3)) {
@@ -268,29 +334,52 @@ export class Entities {
         const p = ud.smoke[Math.floor(Math.random() * ud.smoke.length)];
         this.fx.smoke(b.x + p.x, p.y, b.z + p.z, false, ud.smokeSoft ? 0.6 : 1);
       }
-      if (BUILDINGS[b.type].wall) this.tintWall(b, v);
+      // Under the defence overlay a wall wears its HP band's colour.
+      if (BUILDINGS[b.type].wall) {
+        const band = this.wallTint ? hpBand(b.hp / b.maxHp) : -1;
+        if (band !== v.band) { v.band = band; dirty = true; }
+      }
+      if (dirty) v.batch.write(v.slot);
       const h = this.barY(b);
       this.setBar(v.bar, b.hp / b.maxHp, b.hp < b.maxHp - 0.5 || this.selBuilding === b.id, b.x, h, b.z, camQ);
     }
-    for (const [id, v] of this.buildings) if (!seen.has(id)) { this.dropBuilding(v); this.buildings.delete(id); }
-    // Every wall has its own materials back: the band clones can go.
-    if (!this.wallTint && this.tints.size) {
-      for (const row of this.tints.values()) for (const c of row) c?.dispose();
-      this.tints.clear();
-    }
+    if (met !== this.buildings.size) for (const [id, v] of this.buildings) if (v.met !== st) { this.dropBuilding(v); this.buildings.delete(id); }
     const sb = this.selBuilding ? this.sim.byId(this.selBuilding) : null;
     this.selBox.visible = !!sb;
     if (sb) { this.selBox.position.set(sb.x, 0.05, sb.z); this.selBox.scale.set(sb.size + 0.15, 1, sb.size + 0.15); }
   }
 
-  disposeTints() {
-    for (const row of this.tints.values()) for (const c of row) c?.dispose();
-    this.tints.clear();
+  // A building's view: its own model, or a slot in its type's batch (no model; userData and top from the batch's).
+  makeView(b) {
+    // Wall lines, gates and minefields go without plates: a plate per tile of a line would read as noise.
+    const v = { g: null, batch: null, slot: -1, ud: null, type: b.type, scaffold: null, plate: null, bar: this.makeBar(b.size === 2 ? 1.2 : 0.8), phase: Math.random() * 6, top: 0, band: -1, met: 0 };
+    if (BATCHED.has(b.type)) {
+      let batch = this.batches.get(b.type);
+      if (!batch) this.batches.set(b.type, (batch = new Batch(this.scene, b.type)));
+      Object.assign(v, { batch, ud: batch.ud, top: batch.top, x: b.x, z: b.z, sy: 1, doorY: 0, hot: false });
+      batch.add(v);
+      return v;
+    }
+    v.g = BUILDING_MODELS[b.type]();
+    v.g.position.set(b.x, 0, b.z);
+    this.scene.add(v.g);
+    v.ud = v.g.userData;
+    v.top = TOP.setFromObject(v.g).max.y;
+    v.plate = makePlate(b.size);
+    v.plate.position.set(b.x, 0, b.z);
+    this.scene.add(v.plate);
+    return v;
+  }
+
+  // The hover clones and the batches' instance buffers; their geometries go with the scene.
+  dispose() {
+    this.unlight();
+    for (const batch of this.batches.values()) batch.dispose();
   }
 
   // Height of a building's HP bar.
   barY(b) {
-    const ud = this.buildings.get(b.id)?.g.userData || {};
+    const ud = this.buildings.get(b.id)?.ud || {};
     return (BUILDINGS[b.type].wall ? (ud.height || 1) : b.type === 'tower' ? 2.5 : 1.4) + 0.25;
   }
 
@@ -302,33 +391,41 @@ export class Entities {
   }
 
   dropBuilding(v) {
-    this.scene.remove(v.g); this.scene.remove(v.bar);
+    if (v.batch) {
+      if (this.hot.inst === v) this.unlight();
+      v.batch.remove(v);
+    } else this.scene.remove(v.g);
+    this.scene.remove(v.bar);
     if (v.scaffold) this.scene.remove(v.scaffold);
     if (v.plate) this.scene.remove(v.plate);
   }
 
   // The building or unit under the cursor (kind 'building' | 'unit' | null) glows in the selection colour at half
-  // strength; squads, drawn as shared instanced figures, get a half-strength ring under them instead.
+  // strength (a batched building through its slot); squads, drawn as shared instanced figures, get a half-strength
+  // ring under them instead.
   setHover(kind, id) { this.hoverKind = kind || null; this.hoverId = kind ? id : null; }
 
   // Re-lights whenever the hovered model changes: another target, a model rebuilt by an upgrade, a scaffold
   // coming or going, or the thing gone.
   syncHover() {
     const kind = this.hoverKind, id = this.hoverId, hot = this.hot;
-    let objs = [];
-    if (kind === 'building') { const v = this.buildings.get(id); if (v) objs = v.scaffold ? [v.g, v.scaffold] : [v.g]; }
-    else if (kind === 'unit') { const v = this.units.get(id); if (v?.mesh) objs = [v.mesh]; }
-    if (objs.length !== hot.objs.length || objs.some((o, k) => o !== hot.objs[k])) {
+    let objs = [], inst = null;
+    if (kind === 'building') {
+      const v = this.buildings.get(id);
+      if (v) { if (v.batch) inst = v; else objs.push(v.g); if (v.scaffold) objs.push(v.scaffold); }
+    } else if (kind === 'unit') { const v = this.units.get(id); if (v?.mesh) objs = [v.mesh]; }
+    if (inst !== hot.inst || objs.length !== hot.objs.length || objs.some((o, k) => o !== hot.objs[k])) {
       this.unlight();
       for (const o of objs) this.light(o);
       hot.objs = objs;
+      if (inst) { inst.hot = true; inst.batch.write(inst.slot); hot.inst = inst; }
     }
     const u = kind === 'unit' ? this.sim.byId(id) : null;
     this.hoverRing.visible = !!u;
     if (u) {
       const rs = u.type === 'gunship' ? 1.7 : u.type === 'apc' ? 1.3 : 1;
       this.hoverRing.scale.set(rs, 1, rs);
-      this.hoverRing.position.set(u.x, 0.03, u.z);
+      this.hoverRing.position.set(u.x, RING_Y, u.z);
     }
   }
 
@@ -356,19 +453,20 @@ export class Entities {
     const hot = this.hot;
     for (const [o, m] of hot.swaps) o.material = m;
     for (const c of hot.clones) c.dispose();
-    hot.objs = []; hot.swaps = []; hot.clones = [];
+    if (hot.inst) { hot.inst.hot = false; hot.inst.batch.write(hot.inst.slot); }
+    hot.objs = []; hot.swaps = []; hot.clones = []; hot.inst = null;
   }
 
   syncUnits(s, dt, time, nightF, camQ) {
-    const seen = new Set();
+    const st = this.stamp;
+    let met = 0;
     this.unitFigs.length = 0;
     let ri = 0;
     for (const u of s.ents.units) {
-      seen.add(u.id);
       const def = UNITS[u.type];
       let v = this.units.get(u.id);
       if (!v) {
-        v = { figs: [], mesh: null, bar: this.makeBar(0.7), chev: [] };
+        v = { figs: [], mesh: null, bar: this.makeBar(0.7), chev: [], met: 0 };
         if (def.figs) {
           for (let k = 0; k < def.figs; k++) v.figs.push({ ...unitLook(u.type, u.id * 7 + k, k), x: u.x, y: 0, z: u.z, rot: u.rot, phase: Math.random() * 6, moving: false });
         } else {
@@ -383,18 +481,20 @@ export class Entities {
         }
         this.units.set(u.id, v);
       }
+      v.met = st; met++;
       const target = u.target ? this.sim.byId(u.target) : null;
       if (def.figs) {
         const slots = SQUAD_SLOTS[def.figs];
         const alive = Math.ceil((u.hp / u.maxHp) * def.figs);
         const cs = Math.cos(u.rot), sn = Math.sin(u.rot);
-        v.figs.forEach((f, k) => {
+        for (let k = 0; k < v.figs.length; k++) {
+          const f = v.figs[k];
           if (k >= alive) {
             if (!f.hidden) { f.hidden = true; this.corpses.push({ ...f, dying: 0.001, moving: false, recolor: true, hidden: false, aim: false }); }
-            return;
+            continue;
           }
           f.hidden = false;
-          const [ox, oz] = slots[k];
+          const ox = slots[k][0], oz = slots[k][1];
           const sx = u.x + ox * cs + oz * sn, sz = u.z - ox * sn + oz * cs;
           const dx = sx - f.x, dz = sz - f.z, d = Math.hypot(dx, dz);
           const step = def.speed * 1.4 * dt;
@@ -412,7 +512,7 @@ export class Entities {
             if (!f.moving && !target) f.rot = u.rot;
           }
           this.unitFigs.push(f);
-        });
+        }
       } else {
         const g = v.mesh, ud = g.userData;
         g.position.set(u.x, u.air ? u.alt + Math.sin(time * 2 + u.id) * 0.1 : 0, u.z);
@@ -430,18 +530,19 @@ export class Entities {
         ring.visible = true;
         const rs = u.type === 'gunship' ? 1.7 : u.type === 'apc' ? 1.3 : 1;
         ring.scale.set(rs, 1, rs);
-        ring.position.set(u.x, 0.03, u.z);
+        ring.position.set(u.x, RING_Y, u.z);
         ri++;
       }
       const top = (u.air ? u.alt : 0) + (u.type === 'gunship' ? 0.6 : 0.95);
       this.setBar(v.bar, u.hp / u.maxHp, sel || u.hp < u.maxHp - 0.5, u.x, top, u.z, camQ);
-      v.chev.forEach((ch, c) => {
+      for (let c = 0; c < v.chev.length; c++) {
+        const ch = v.chev[c];
         ch.visible = u.vet > c;
         if (ch.visible) { ch.position.set(u.x, top + 0.12 + c * 0.07, u.z); ch.quaternion.copy(camQ); }
-      });
+      }
     }
     for (let k = ri; k < this.rings.length; k++) this.rings[k].visible = false;
-    for (const [id, v] of this.units) if (!seen.has(id)) {
+    if (met !== this.units.size) for (const [id, v] of this.units) if (v.met !== st) {
       if (v.mesh) this.scene.remove(v.mesh);
       this.scene.remove(v.bar);
       for (const ch of v.chev) this.scene.remove(ch);
@@ -450,33 +551,33 @@ export class Entities {
   }
 
   syncVehicles(s, dt) {
-    const seen = new Set();
+    const st = this.stamp;
     for (const veh of s.ents.vehicles) {
-      seen.add(veh.id);
       let v = this.vehicles.get(veh.id);
-      if (!v) { v = { g: makeBus() }; this.scene.add(v.g); this.vehicles.set(veh.id, v); }
+      if (!v) { v = { g: makeBus(), met: 0 }; this.scene.add(v.g); this.vehicles.set(veh.id, v); }
+      v.met = st;
       v.g.position.set(veh.x, 0, veh.z);
       v.g.rotation.y = veh.rot;
       if (veh.moving) for (const w of v.g.userData.wheels) w.rotation.x += dt * 10;
     }
-    for (const [id, v] of this.vehicles) if (!seen.has(id)) { this.scene.remove(v.g); this.vehicles.delete(id); }
+    for (const [id, v] of this.vehicles) if (v.met !== st) { this.scene.remove(v.g); this.vehicles.delete(id); }
   }
 
   syncDead(s, dt) {
-    const sim = this.sim;
-    const seen = new Set();
+    const sim = this.sim, st = this.stamp;
+    let met = 0;
     this.deadFigs.length = 0;
     for (const z of s.ents.dead) {
       if (z.gone) continue;
-      seen.add(z.id);
       let f = this.dead.get(z.id);
       if (!f) { f = { ...deadLook(z.type, z.look, z.soldier), x: z.x, z: z.z, rot: z.rot, phase: (z.look % 100) / 16 }; this.dead.set(z.id, f); }
+      f.met = st; met++;
       f.x = z.x; f.z = z.z; f.rot = z.rot;
       f.moving = z.moving;
       f.rising = z.rise;
       f.climb = z.stack > 0;
       const wall = z.stack > 0 && z.wall > 0 ? this.buildings.get(z.wall) : null;
-      const wallH = wall ? (wall.g.userData.height || 1) : 1;
+      const wallH = wall ? (wall.ud.height || 1) : 1;
       const targetY = z.drop > 0 ? z.drop * wallH : z.stack > 0 ? z.stack * wallH * 0.85 : z.y;
       f.y = (f.y ?? 0) + (targetY - (f.y ?? 0)) * Math.min(1, dt * 8);
       f.scream = this.screams.get(z.id) || 0;
@@ -486,28 +587,29 @@ export class Entities {
       f.hidden = !sim.visible(z.x, z.z);
       this.deadFigs.push(f);
     }
-    for (const id of this.dead.keys()) if (!seen.has(id)) this.dead.delete(id);
+    if (met !== this.dead.size) for (const [id, f] of this.dead) if (f.met !== st) this.dead.delete(id);
   }
 
   syncRefugees(s, dt) {
-    const sim = this.sim;
-    const seen = new Set();
+    const sim = this.sim, st = this.stamp;
+    let met = 0;
     this.refFigs.length = 0;
     for (const r of s.ents.refugees) {
-      seen.add(r.id);
       let f = this.refugees.get(r.id);
       if (!f) {
         f = { kind: 'civ', skin: hashPick(r.look, SKIN, 5), shirt: hashPick(r.look, CLOTH, 6), pants: hashPick(r.look, PANTS, 7), pack: (r.look & 3) !== 0, packColor: hashPick(r.look, [0x6a5a3a, 0x3a4a6a, 0x7a2a2a, 0x4a6a3a], 8), phase: (r.look % 100) / 16, scale: (r.look & 7) === 0 ? 0.72 : 1 };
         this.refugees.set(r.id, f);
       }
+      f.met = st; met++;
       f.x = r.x; f.z = r.z; f.rot = r.rot; f.y = 0;
       f.moving = r.moving;
       if (f.moving) f.phase += dt * 8;
       f.hidden = !!r.camp || !sim.visible(r.x, r.z);
       this.refFigs.push(f);
     }
-    for (const id of this.refugees.keys()) if (!seen.has(id)) this.refugees.delete(id);
+    if (met !== this.refugees.size) for (const [id, f] of this.refugees) if (f.met !== st) this.refugees.delete(id);
   }
 
-  figureLists(extra = []) { return [this.unitFigs, this.deadFigs, this.refFigs, this.corpses, ...extra]; }
+  // The crowd's lists, in one array kept from frame to frame; `extra` is one more list (the towns' civilians).
+  figureLists(extra = []) { this.lists[4] = extra; return this.lists; }
 }

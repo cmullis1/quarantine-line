@@ -6,14 +6,17 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2321241c'/%3E%3Crect x='2' y='6' width='12' height='4' fill='%23e9b23a'/%3E%3Cpath d='M3 6h2l-2 4zM7 6h2l-2 4zM11 6h2l-2 4z' fill='%2321241c'/%3E%3Crect x='3' y='10' width='1.5' height='4' fill='%23c8402a'/%3E%3Crect x='11.5' y='10' width='1.5' height='4' fill='%23c8402a'/%3E%3C/svg%3E">
   <title>Quarantine Line</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<!-- The fonts do not hold up the first paint (the loading card shows in fallback faces until they arrive). -->
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
 <link rel="stylesheet" href="styles.css">
 <script type="importmap">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
+<!-- three.js is the largest file and is found three imports deep: fetch it at once. -->
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js">
 </head>
 <body>
-<canvas id="view"></canvas>
+<canvas id="view" class="cold"></canvas>
 <div id="labels"></div>
 <div id="arrows"></div>
 <div id="edgeflash"><i class="l"></i><i class="r"></i><i class="t"></i><i class="b"></i></div>
@@ -48,6 +51,15 @@
 <div id="tip"></div>
 <div id="hovercard"></div>
 <div id="modal"></div>
+<div id="boot"><div class="card"><div class="stamp">REPUBLIC OF VALDMARK · MINISTRY OF DEFENCE</div>
+  <h1>QUARANTINE <span>LINE</span></h1><p>Mobilising the ministry…</p><div class="load"><i></i></div></div></div>
+<script>
+  // If a module fails to load (offline, the CDN down), say so rather than loading forever.
+  addEventListener('error', (e) => {
+    const card = document.querySelector('#boot p');
+    if (card && (e.target?.tagName === 'SCRIPT' || e.message)) card.textContent = 'The game could not load. Check the connection and reload the page.';
+  }, true);
+</script>
 <script type="module" src="js/main.js"></script>
 </body>
 </html>

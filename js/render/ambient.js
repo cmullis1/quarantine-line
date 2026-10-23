@@ -2,11 +2,23 @@
 // country panics, abandoned cars, crows over fallen towns, rain. Purely visual and not saved.
 import * as THREE from 'three';
 import { createRng } from '../sim/rng.js';
-import { makeCar, PALETTE } from './models.js';
+import { makeCar, partsOf, mergeParts, bakedMesh } from './models.js';
 
 const SKIN = [0xe0b48f, 0xc68e66, 0x8d5a3b, 0xf1c9a5];
 const CLOTH = [0x9b3b3b, 0x3b5b9b, 0x7a6a4a, 0x4a7a5a, 0xb08a3a, 0x6a4a7a, 0xc8c0b0, 0x5a8aa0];
 const CAR_COLORS = [0xb03030, 0x3050a0, 0xd0d0d0, 0x303030, 0x2a7a4a, 0xd0a030];
+
+// A car baked to one mesh; the geometry is kept per colour across games.
+const carGeos = new Map();
+function carMesh(color) {
+  let geo = carGeos.get(color);
+  if (!geo) {
+    geo = mergeParts(partsOf(makeCar(color)));
+    geo.userData.shared = true;
+    carGeos.set(color, geo);
+  }
+  return bakedMesh(geo);
+}
 
 export class Ambient {
   constructor(scene, sim) {
@@ -16,6 +28,7 @@ export class Ambient {
     this.civs = [];
     this.cars = [];
     this.wrecks = [];
+    this.wreckMesh = null;
     this.wreckDay = 0;
     // Crows: one instanced mesh of tiny flapping birds.
     this.crowMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.16, 0.02, 0.06), new THREE.MeshBasicMaterial({ color: 0x111111 }), 120);
@@ -99,7 +112,7 @@ export class Ambient {
         // Traffic keeps to the roads; towns with no road between them get none.
         const path = sim.nav.roadPath(a.x, a.z, b.x, b.z);
         if (path && path.length) {
-          const g = makeCar(CAR_COLORS[Math.floor(r.next() * CAR_COLORS.length)]);
+          const g = carMesh(CAR_COLORS[Math.floor(r.next() * CAR_COLORS.length)]);
           g.position.set(a.x, 0, a.z);
           this.scene.add(g);
           this.cars.push({ g, path, speed: 2.2 + r.next() * 1.2 });
@@ -121,16 +134,23 @@ export class Ambient {
     if (sim.day !== this.wreckDay) {
       this.wreckDay = sim.day;
       const want = sim.act <= 1 ? 0 : Math.min(40, (sim.day - 6) * 2);
-      const m = sim.map;
+      const m = sim.map, had = this.wrecks.length;
       for (let tries = 0; this.wrecks.length < want && tries < 200; tries++) {
         const k = Math.floor(r.next() * m.N * m.N);
         if (!m.road[k] || m.townId[k] >= 0 || m.bridge[k]) continue;
         const g = makeCar(CAR_COLORS[Math.floor(r.next() * CAR_COLORS.length)]);
-        g.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.color.multiplyScalar(0.55); } });
         g.position.set((k % m.N) + 0.25 + r.next() * 0.5, 0, ((k / m.N) | 0) + 0.25 + r.next() * 0.5);
         g.rotation.y = r.next() * 6.28;
-        this.scene.add(g);
         this.wrecks.push(g);
+      }
+      // All wrecks are one darkened mesh, rebuilt on the days more are left behind.
+      if (this.wrecks.length !== had) {
+        const parts = [];
+        for (const g of this.wrecks) partsOf(g, parts);
+        for (const p of parts) p.color = p.material.color.clone().multiplyScalar(0.55);
+        if (this.wreckMesh) { this.scene.remove(this.wreckMesh); this.wreckMesh.geometry.dispose(); }
+        this.wreckMesh = bakedMesh(mergeParts(parts));
+        this.scene.add(this.wreckMesh);
       }
     }
 

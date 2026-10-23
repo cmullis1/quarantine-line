@@ -57,31 +57,45 @@ export class Labels {
     this.hordes = [];
     this.marks = [];
     this.markW = new Map(); // building id → its marker's last measured width, in screen pixels
+    // Labels whose text changed last frame, measured at the start of the next one, before this frame writes
+    // anything: a width read between writes forces the page to lay itself out again.
+    this.remeasure = [];
     this.box = box;
     this.z = 1;
   }
 
   place(el, x, y, z, html) {
     const [sx, sy, vis] = this.app.view.project(x, y, z);
-    this.put(el, sx, sy, vis && this.fits(sx, sy, (el.offsetWidth || 160) * this.z), html);
+    this.put(el, sx, sy, vis && this.fits(sx, sy, this.width(el)), html);
   }
+
+  // A label's width on the screen; read from the page only when it is not known yet (a hidden one has none).
+  width(el) {
+    if (!el._w && el._d !== 'none') el._w = el.offsetWidth;
+    return (el._w || 160) * this.z;
+  }
+
+  hide(el) { if (el._d !== 'none') { el.style.display = 'none'; el._d = 'none'; } }
 
   // A label is centred on its anchor, so it would hang off the screen within half its width of an edge: hide it
   // there rather than let it overflow.
   fits(sx, sy, w) { return sx > w / 2 && sx < innerWidth - w / 2 && sy > 0; }
 
   // The layer is zoomed by the interface scale, so the screen point is divided by it.
+  // Each write only when it changes what is shown.
   put(el, sx, sy, show, html) {
-    el.style.display = show ? '' : 'none';
-    if (!show) return false;
-    el.style.transform = `translate(${Math.round(sx) / this.z}px, ${Math.round(sy) / this.z}px) translate(-50%, -100%)`;
+    if (!show) { this.hide(el); return false; }
+    if (el._d !== '') { el.style.display = ''; el._d = ''; }
+    const tr = `translate(${Math.round(sx) / this.z}px, ${Math.round(sy) / this.z}px) translate(-50%, -100%)`;
+    if (el._tr !== tr) { el.style.transform = tr; el._tr = tr; }
     if (el._h === html) return false;
     el.innerHTML = html; el._h = html;
+    this.remeasure.push(el);
     return true;
   }
 
   // One marker per building with something to say, on the screen, nearest the middle first. The pool only grows,
-  // and a marker's width is measured only when its text changes.
+  // and a marker's width is measured only when its text changes (at the start of the next frame).
   markers() {
     const view = this.app.view, cx = innerWidth / 2, cy = innerHeight / 2;
     const list = [];
@@ -99,18 +113,28 @@ export class Labels {
     }
     this.marks.forEach((el, n) => {
       const it = list[n];
-      if (!it) { if (el.style.display !== 'none') el.style.display = 'none'; return; }
+      if (!it) { this.hide(el); return; }
       const { id, m, sx, sy } = it;
       if (el._id !== id) { el.dataset.b = id; el._id = id; }
       if (el._lv !== m.level) { el.className = 'bmark' + (m.level ? ' ' + m.level : ''); el._lv = m.level; }
-      if (this.put(el, sx, sy, true, `<span class="ic">${m.icon}</span>${m.text}`)) this.markW.set(id, el.offsetWidth * this.z);
+      this.put(el, sx, sy, true, `<span class="ic">${m.icon}</span>${m.text}`);
     });
   }
 
   update() {
     const sim = this.app.sim, s = sim.state;
-    // A new scale changes every measured width.
-    if (uiScale() !== this.z) { this.z = uiScale(); this.markW.clear(); }
+    for (const el of this.remeasure) {
+      const w = el._d === 'none' ? 0 : el.offsetWidth;
+      if (el.classList.contains('bmark')) { if (w) this.markW.set(el._id, w * this.z); } else el._w = w;
+    }
+    this.remeasure.length = 0;
+    // A new scale changes every measured width, and so do the web fonts arriving after the fallback was measured.
+    const fontsArrived = !this.fontsIn && document.fonts.status === 'loaded';
+    if (fontsArrived) this.fontsIn = true;
+    if (uiScale() !== this.z || fontsArrived) {
+      this.z = uiScale(); this.markW.clear();
+      for (const el of [...this.towns, ...this.cross, ...this.sites, ...this.hordes]) el._w = 0;
+    }
     const thr = breakoutThreshold(sim), econ = this.app.overlay === 'economy';
     sim.map.towns.forEach((info, k) => {
       const t = s.towns[k];
@@ -126,9 +150,11 @@ export class Labels {
       this.place(this.towns[k], info.x, 2, info.z, html);
       this.towns[k].classList.toggle('sel', this.app.sel.town === k);
     });
+    const waitingAt = new Map();
+    for (const r of s.ents.refugees) if (r.mode === 'waiting') waitingAt.set(r.crossId, (waitingAt.get(r.crossId) || 0) + 1);
     sim.map.crossings.forEach((c, k) => {
       const el = this.cross[k];
-      const waiting = s.ents.refugees.filter((r) => r.crossId === c.id && (r.mode === 'waiting')).length;
+      const waiting = waitingAt.get(c.id) || 0;
       // Every crossing carries its name, so a minister's "the Orsk crossing" can be found on the map.
       this.place(el, c.oi + 0.5 + c.dx * 2, 0.6, c.oj + 0.5 + c.dz * 2, `${sim.map.sites[c.siteId].name} crossing${waiting ? ` · ${STANCE_ICON[s.border]} ${waiting} waiting` : ''}`);
     });
@@ -141,10 +167,10 @@ export class Labels {
     }
     this.hordes.forEach((el, n) => {
       const h = contacts[n];
-      if (!h) { el.style.display = 'none'; return; }
+      if (!h) { this.hide(el); return; }
       let lead = null;
       for (const z of s.ents.dead) if (z.horde === h.id && !z.gone && sim.visible(z.x, z.z)) { lead = z; break; }
-      if (!lead) { el.style.display = 'none'; return; }
+      if (!lead) { this.hide(el); return; }
       this.place(el, lead.x, 1.4, lead.z, `⚠ ${h.label ? h.label.toUpperCase() + ' · ' : ''}${h.members} DEAD`);
     });
     this.markers();

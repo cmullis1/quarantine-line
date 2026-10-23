@@ -1,7 +1,7 @@
 // Bottom-left panel describing the current selection: units, a building, or a town. Its orders sit on a command
 // card: a grid of buttons, each with an icon, a label and its key in the top-right corner, saying on the button why
 // it cannot be used.
-import { $, $$, costHtml, needHtml, tipOn, esc, fmt, hours, reach } from './dom.js';
+import { $, $$, costHtml, needHtml, tipOn, esc, fmt, hours, reach, setStyle, setText, setClass } from './dom.js';
 import { BUILDINGS, WEAPONS } from '../config/buildings.js';
 import { UNITS } from '../config/units.js';
 import { SPECIALTIES } from '../config/world.js';
@@ -164,17 +164,17 @@ export class Selection {
       $$('#selection [data-hp]').forEach((el) => {
         const us = sel.units.map((id) => sim.byId(id)).filter((u) => u && u.type === el.dataset.hp);
         const hp = us.reduce((a, u) => a + u.hp, 0), max = us.reduce((a, u) => a + u.maxHp, 0);
-        el.style.width = max ? (hp / max) * 100 + '%' : '0';
+        setStyle(el, 'width', max ? ((hp / max) * 100).toFixed(1) + '%' : '0');
       });
-      const k = $('#sel-kills'); const u = sim.byId(sel.units[0]); if (k && u) k.textContent = u.kills;
+      const k = $('#sel-kills'); const u = sim.byId(sel.units[0]); if (k && u) setText(k, String(u.kills));
       // An MG team's set-up, and the way it faces (once set up) or will face (setting up, or on the way there).
-      const su = $('#sel-setup'); if (su && u) su.textContent = setupText(u);
-      const fc = $('#sel-face'); if (fc && u) { const a = u.setup >= UNITS[u.type].setup ? u.rot : u.face; fc.textContent = compass(Math.sin(a), Math.cos(a)); }
+      const su = $('#sel-setup'); if (su && u) setText(su, setupText(u));
+      const fc = $('#sel-face'); if (fc && u) { const a = u.setup >= UNITS[u.type].setup ? u.rot : u.face; setText(fc, compass(Math.sin(a), Math.cos(a))); }
     }
     if (sel.building) {
       const b = sim.byId(sel.building);
       if (!b) return;
-      const hp = $('#sel-bhp'); if (hp) hp.style.width = (b.hp / b.maxHp) * 100 + '%';
+      const hp = $('#sel-bhp'); if (hp) setStyle(hp, 'width', ((b.hp / b.maxHp) * 100).toFixed(1) + '%');
       // Reasons on the card: an upgrade or a unit waiting for research or short of funds.
       $$('#selection [data-up]').forEach((x) => {
         const why = upgradeWhy(sim, x.dataset.up), w = x.querySelector('.why');
@@ -187,7 +187,7 @@ export class Selection {
         x.classList.toggle('short', open && !!why);
         if (w._h !== why) { w.innerHTML = why; w._h = why; }
       });
-      const p = $('#sel-prog'); if (p) p.textContent = Math.floor(b.progress * 100) + '%';
+      const p = $('#sel-prog'); if (p) setText(p, Math.floor(b.progress * 100) + '%');
       const q = $('#sel-queue');
       if (q) {
         const html = b.queue.map((t, k) => `<span class="qi" data-q="${k}" title="Cancel">${UNITS[t].icon}${k === 0 ? `<i style="width:${(b.trainT / UNITS[t].train) * 100}%"></i>` : ''}</span>`).join('') || '<span class="hint">Queue empty</span>';
@@ -197,14 +197,14 @@ export class Selection {
       if (cp) {
         const cross = sim.map.crossings.find((c) => c.i === b.i && c.j === b.j);
         const waiting = cross ? s.ents.refugees.filter((r) => r.crossId === cross.id && r.mode === 'waiting').length : 0;
-        cp.textContent = cross ? `Crossing to ${sim.map.sites[cross.siteId].name}: ${waiting} groups waiting. Caught ${s.stats.turnedAway} infected so far. Screening only happens while the border is SCREENED.` : 'Not on a border crossing: it guards the road but screens no one.';
+        setText(cp, cross ? `Crossing to ${sim.map.sites[cross.siteId].name}: ${waiting} groups waiting. Caught ${s.stats.turnedAway} infected so far. Screening only happens while the border is SCREENED.` : 'Not on a border crossing: it guards the road but screens no one.');
       }
       const camp = $('#sel-camp');
-      if (camp) camp.textContent = `${s.ents.refugees.filter((r) => r.camp === b.id).length} / ${REFUGEES.campCapacity * (sim.hasTech('c3') ? 2 : 1)} groups`;
-      const k = $('#sel-kills'); if (k) k.textContent = b.kills || 0;
-      const pr = $('#sel-press'); if (pr) pr.textContent = b.press ? `${Math.round(b.press * 100)}% of the climb` : 'none';
+      if (camp) setText(camp, `${s.ents.refugees.filter((r) => r.camp === b.id).length} / ${REFUGEES.campCapacity * (sim.hasTech('c3') ? 2 : 1)} groups`);
+      const k = $('#sel-kills'); if (k) setText(k, String(b.kills || 0));
+      const pr = $('#sel-press'); if (pr) setText(pr, b.press ? `${Math.round(b.press * 100)}% of the climb` : 'none');
       const wk = $('#sel-work');
-      if (wk) { wk.textContent = b.idle ? 'Idle: no workers' : `${BUILDINGS[b.type].workers} at work`; wk.className = b.idle ? 'bad' : ''; }
+      if (wk) { setText(wk, b.idle ? 'Idle: no workers' : `${BUILDINGS[b.type].workers} at work`); setClass(wk, b.idle ? 'bad' : ''); }
     }
     if (sel.town != null) {
       const el = $('#sel-town');

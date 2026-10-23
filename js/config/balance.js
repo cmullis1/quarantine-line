@@ -14,10 +14,31 @@ export const START = {
   order: 60,
 };
 
+// firstHorde: hours from the start to the first horde's rumour. relaxHours: the guaranteed calm after a peak.
+// spacing: multiplies the time between hordes. peakPace: how fast the horde clock and the trickle run during a fight
+// (1 = as in build; 0 = a fight holds them, so peaks never chain).
 export const DIFFICULTY = {
-  recruit: { horde: 0.7, spread: 0.75, income: 1.2, refugeeInfected: 0.7, deadHp: 0.85, politics: 0.75, label: 'Recruit' },
-  veteran: { horde: 1, spread: 1, income: 1, refugeeInfected: 1, deadHp: 1, politics: 1, label: 'Veteran' },
-  nightmare: { horde: 1.4, spread: 1.25, income: 0.85, refugeeInfected: 1.3, deadHp: 1.15, politics: 1.25, label: 'Nightmare' },
+  recruit: { horde: 0.7, spread: 0.75, income: 1.2, refugeeInfected: 0.7, deadHp: 0.85, politics: 0.75, firstHorde: 120, relaxHours: 36, spacing: 1.6, peakPace: 0, label: 'Recruit' },
+  veteran: { horde: 1.7, spread: 1, income: 0.95, refugeeInfected: 1, deadHp: 1.15, politics: 1, firstHorde: 84, relaxHours: 20, spacing: 1.2, peakPace: 0.25, label: 'Veteran' },
+  nightmare: { horde: 2.0, spread: 1.25, income: 0.85, refugeeInfected: 1.3, deadHp: 1.3, politics: 1.25, firstHorde: 62, relaxHours: 8, spacing: 1.0, peakPace: 0.5, label: 'Nightmare' },
+};
+// Why (PC1b, B14): with the quiet spells every style won Veteran 12/12 and the expert Nightmare 12/12, so the fights
+// got harder instead of the calm shorter.
+//   veteran horde 1.7, deadHp 1.15: bigger, tougher hordes (they alone still left the balanced bot 11/12);
+//   veteran income 0.95: the last step to balanced 9/12 (0.9 dropped it to 6/12), quiet kept at 20.8%;
+//   nightmare horde 2.0, deadHp 1.3: expert 4/12, balanced 0/12, quiet 9.2%. Its dead now reach the MAX_DEAD cap,
+//   so a bigger Nightmare horde changes little: tune it with deadHp or politics from here on.
+
+// The pacing director (world.js): build → peak (a fight) → relax (guaranteed calm) → build.
+export const PACE = {
+  peakDead: 8,               // dead inside the border that make a peak
+  calmDead: 3,               // a peak ends at or below this many inside (and no horde in contact or crossed)
+  disperse: 0.15,            // a fully spawned horde with this share of its dead left breaks up into stragglers
+  strayHours: 6,             // unseen this long, a straggler outside the border turns back toward its site in relax
+  strayRelax: 12,            // ...and is gone once unseen this long during relax
+  strayGone: 36,             // ...or this long at any other time
+  cardHold: 12,              // most hours a non-urgent card waits for a peak to end
+  cardGap: 6,                // fewest hours between two new cards
 };
 
 export const ECONOMY = {
@@ -111,7 +132,6 @@ export const WORLD = {
 };
 
 export const HORDE = {
-  firstHour: 62,
   sizeBase: 8,
   sizePerDay: 2.0,
   sizePerWorldInf: 0.25,
