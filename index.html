@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2321241c'/%3E%3Crect x='2' y='6' width='12' height='4' fill='%23e9b23a'/%3E%3Cpath d='M3 6h2l-2 4zM7 6h2l-2 4zM11 6h2l-2 4z' fill='%2321241c'/%3E%3Crect x='3' y='10' width='1.5' height='4' fill='%23c8402a'/%3E%3Crect x='11.5' y='10' width='1.5' height='4' fill='%23c8402a'/%3E%3C/svg%3E">
+  <title>Quarantine Line</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;600&family=Source+Serif+4:ital,wght@0,400;0,600;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="labels"></div>
+<div id="arrows"></div>
+<div id="edgeflash"><i class="l"></i><i class="r"></i><i class="t"></i><i class="b"></i></div>
+<div id="hud" hidden>
+  <div id="top" class="panel"></div>
+  <div id="ticker"><span class="tag">WIRE</span><span id="ticker-text"></span></div>
+  <div id="left">
+    <div id="mm-wrap" class="panel">
+      <canvas id="minimap"></canvas>
+      <div class="legend" id="mm-legend"></div>
+      <div id="overlay-label"></div>
+    </div>
+    <div id="feed">
+      <div id="alerts"></div>
+      <button id="alerts-clear" title="Empty the alert feed">✕ Clear</button>
+    </div>
+  </div>
+  <div id="right" class="panel"></div>
+  <div id="letters"></div>
+  <div id="bottom">
+    <div id="selection" class="panel"></div>
+    <div id="groups"></div>
+    <div id="build" class="panel"></div>
+    <div id="actions" class="panel"></div>
+  </div>
+  <div id="lesson" class="panel"></div>
+  <div id="pausebanner">PAUSED</div>
+  <div id="banner"></div>
+</div>
+<div id="selbox"></div>
+<div id="ghost-msg"></div>
+<div id="tip"></div>
+<div id="hovercard"></div>
+<div id="modal"></div>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
